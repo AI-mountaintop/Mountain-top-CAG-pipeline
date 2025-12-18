@@ -4,10 +4,11 @@ import { syncBoard } from '@/lib/trello/sync';
 
 export async function POST(
     request: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     try {
-        const boardId = params.id;
+        const { id } = await params;
+        const boardId = id;
 
         // 1. Get board URL from database
         const { data: board, error } = await supabaseAdmin
