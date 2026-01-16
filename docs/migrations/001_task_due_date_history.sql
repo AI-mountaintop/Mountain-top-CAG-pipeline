@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS task_due_date_history (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    task_id UUID REFERENCES tasks_CAG_custom(id) ON DELETE CASCADE,
+    task_id UUID REFERENCES "tasks_CAG_custom"(id) ON DELETE CASCADE,
     clickup_task_id TEXT NOT NULL,
     old_due_date TIMESTAMPTZ,
     new_due_date TIMESTAMPTZ,
