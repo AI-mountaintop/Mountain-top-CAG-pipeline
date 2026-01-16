@@ -179,12 +179,23 @@ Understand what users MEAN, not just what they SAY:
 | "task assign to ian" | Tasks where ian is an assignee | EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%ian%' OR a->>'email' ILIKE '%ian%') |
 | "ian's tasks" | Tasks assigned to ian | Same as above |
 | "who is working on X" | Assignees of task X | SELECT assignees WHERE name ILIKE '%X%' |
-| "overdue tasks" | Tasks past due date | due_date < NOW() AND status_type != 'closed' |
+| "overdue tasks" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "missed deadline" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "late tasks" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "pending overdue" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
 | "incomplete tasks" | Tasks not done | status_type != 'closed' |
 | "done tasks" | Completed tasks | status_type = 'closed' OR status ILIKE '%complete%' OR status ILIKE '%done%' |
 | "urgent" | High priority tasks | priority ILIKE '%urgent%' OR priority ILIKE '%high%' |
 | "recent" / "latest" | Recently updated | ORDER BY updated_at DESC |
 | "old" / "oldest" | Oldest tasks | ORDER BY created_at ASC |
+
+CRITICAL: OVERDUE/MISSED DEADLINE LOGIC
+- When user asks about "overdue", "missed deadline", "late", or "past due" tasks:
+  - ALWAYS include: status_type != 'closed' (to exclude completed tasks)
+  - The user wants tasks that should have been done but are STILL PENDING
+  - A task is overdue ONLY IF: due_date < NOW() AND it is NOT complete
+  - Example: If due_date was Jan 5 but it's now Jan 20 and task is still open = OVERDUE
+  - If task was due Jan 5 but completed on Jan 6, it is NOT overdue (it's done)
 
 === MANDATORY GUARDRAILS ===
 
@@ -247,6 +258,20 @@ Q: "who is assigned to the marketing campaign task"
 → Columns: name, url, assignees
 → Filter: name ILIKE '%marketing campaign%'
 SQL: SELECT name, url, assignees FROM "tasks_CAG_custom" WHERE list_id = $1 AND name ILIKE '%marketing campaign%' LIMIT 100
+
+Q: "tell me all the tasks that missed their deadline"
+→ Intent: LIST tasks that are OVERDUE and still PENDING (not complete)
+→ Table: tasks_CAG_custom
+→ Columns: name, url, due_date, status, assignees (so user knows who is responsible)
+→ Filter: due_date < NOW() AND status_type != 'closed' (MUST exclude completed tasks!)
+SQL: SELECT name, url, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status, assignees FROM "tasks_CAG_custom" WHERE list_id = $1 AND due_date < NOW() AND due_date IS NOT NULL AND status_type != 'closed' ORDER BY due_date ASC LIMIT 100
+
+Q: "tasks that are late"
+→ Intent: Same as missed deadline - OVERDUE and NOT complete
+→ Table: tasks_CAG_custom
+→ Columns: name, url, due_date, status, assignees
+→ Filter: due_date < NOW() AND status_type != 'closed'
+SQL: SELECT name, url, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status, assignees FROM "tasks_CAG_custom" WHERE list_id = $1 AND due_date < NOW() AND due_date IS NOT NULL AND status_type != 'closed' ORDER BY due_date ASC LIMIT 100
 
 Your response should be ONLY the SQL query, nothing else. Do not include your analysis, explanations, markdown formatting, or any other text.`;
 
