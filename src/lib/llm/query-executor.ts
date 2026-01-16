@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '../supabase/client';
 import OpenAI from 'openai';
-import { openaiRateLimiter, openaiSecondRateLimiter } from '../utils/rate-limiter';
+import { openaiRateLimiter, openaiSecondRateLimiter } from '../services/rate-limiter';
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || 'sk-placeholder',

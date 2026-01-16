@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { generateSQL } from '@/lib/llm/query-generator';
 import { formatResponse } from '@/lib/llm/query-executor';
 import { supabaseAdmin } from '@/lib/supabase/client';
-import { setProgress } from '@/lib/progress-store';
+import { setProgress } from '@/lib/stores';
 
 // Configure route for file uploads
 export const runtime = 'nodejs';

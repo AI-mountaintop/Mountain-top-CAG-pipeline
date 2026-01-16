@@ -1,4 +1,4 @@
-import { clickupRateLimiter, clickupMinuteRateLimiter } from '../utils/rate-limiter';
+import { clickupRateLimiter, clickupMinuteRateLimiter } from '../services/rate-limiter';
 
 const CLICKUP_API_TOKEN = process.env.CLICKUP_API_TOKEN!;
 const CLICKUP_BASE_URL = 'https://api.clickup.com/api/v2';

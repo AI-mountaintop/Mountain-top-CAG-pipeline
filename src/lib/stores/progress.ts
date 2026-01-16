@@ -1,16 +1,6 @@
 // In-memory progress store (in production, use Redis or a database)
-const progressStore = new Map<string, {
-    current: number;
-    total: number;
-    currentQuestion: string;
-    status: 'processing' | 'completed' | 'error';
-    successCount: number;
-    errorCount: number;
-    result?: string;
-    error?: string;
-}>();
 
-export function setProgress(jobId: string, progress: {
+export interface ProgressData {
     current: number;
     total: number;
     currentQuestion: string;
@@ -19,7 +9,11 @@ export function setProgress(jobId: string, progress: {
     errorCount: number;
     result?: string;
     error?: string;
-}) {
+}
+
+const progressStore = new Map<string, ProgressData>();
+
+export function setProgress(jobId: string, progress: ProgressData) {
     progressStore.set(jobId, progress);
 }
 
@@ -30,4 +24,3 @@ export function getProgress(jobId: string) {
 export function deleteProgress(jobId: string) {
     progressStore.delete(jobId);
 }
-

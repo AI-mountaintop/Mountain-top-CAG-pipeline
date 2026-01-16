@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getProgress, deleteProgress } from '@/lib/progress-store';
+import { getProgress, deleteProgress } from '@/lib/stores';
 
 export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
