@@ -69,6 +69,43 @@ async function handleTaskUpdate(event: any, taskId: string, listId: string) {
         // Fetch latest task data from ClickUp
         const taskData = await clickupClient.getTask(taskId);
 
+        // Parse the new due date from ClickUp
+        const newDueDate = taskData.due_date
+            ? new Date(parseInt(taskData.due_date)).toISOString()
+            : null;
+
+        // Check for due date changes by fetching existing task
+        const { data: existingTask } = await supabaseAdmin
+            .from('tasks_CAG_custom')
+            .select('id, due_date')
+            .eq('clickup_task_id', taskId)
+            .single();
+
+        // Log due date change if the task exists and due_date is different
+        if (existingTask) {
+            const oldDueDate = existingTask.due_date;
+
+            // Compare due dates (handle null comparisons)
+            const dueDateChanged = oldDueDate !== newDueDate &&
+                (oldDueDate !== null || newDueDate !== null);
+
+            if (dueDateChanged) {
+                try {
+                    await supabaseAdmin.from('task_due_date_history').insert({
+                        task_id: existingTask.id,
+                        clickup_task_id: taskId,
+                        old_due_date: oldDueDate,
+                        new_due_date: newDueDate,
+                        changed_by: event.user || null,
+                    });
+                    console.log(`📅 Due date changed for task ${taskId}: ${oldDueDate || 'none'} → ${newDueDate || 'none'}`);
+                } catch (historyError) {
+                    // Don't fail the task update if history logging fails
+                    console.error(`Failed to log due date change for task ${taskId}:`, historyError);
+                }
+            }
+        }
+
         // Get internal list ID
         const { data: list } = await supabaseAdmin
             .from('lists')
@@ -92,7 +129,7 @@ async function handleTaskUpdate(event: any, taskId: string, listId: string) {
                 text_content: taskData.text_content || null,
                 position: parseFloat(taskData.orderindex) || 0,
                 orderindex: taskData.orderindex || null,
-                
+
                 // Dates
                 due_date: taskData.due_date ? new Date(parseInt(taskData.due_date)).toISOString() : null,
                 start_date: taskData.start_date ? new Date(parseInt(taskData.start_date)).toISOString() : null,
@@ -100,32 +137,32 @@ async function handleTaskUpdate(event: any, taskId: string, listId: string) {
                 date_done: taskData.date_done ? new Date(taskData.date_done).toISOString() : null,
                 date_created: taskData.date_created ? new Date(parseInt(taskData.date_created)).toISOString() : null,
                 date_updated: taskData.date_updated ? new Date(parseInt(taskData.date_updated)).toISOString() : null,
-                
+
                 // Status
                 is_archived: taskData.archived || false,
                 status: taskData.status?.status || null,
                 status_color: taskData.status?.color || null,
                 status_type: taskData.status?.type || null,
                 status_orderindex: taskData.status?.orderindex || null,
-                
+
                 // Priority
                 priority: taskData.priority?.priority || null,
                 priority_color: taskData.priority?.color || null,
                 priority_id: taskData.priority?.id || null,
                 priority_orderindex: taskData.priority?.orderindex || null,
-                
+
                 // Relationships
                 parent_task_id: taskData.parent || null,
                 dependencies: taskData.dependencies || [],
                 linked_tasks: taskData.linked_tasks || [],
-                
+
                 // Team and permissions
                 team_id: taskData.team_id || null,
                 permission_level: taskData.permission_level || null,
-                
+
                 // Sharing
                 sharing: taskData.sharing || {},
-                
+
                 // JSONB fields
                 tags: taskData.tags || [],
                 assignees: taskData.assignees || [],
@@ -133,18 +170,18 @@ async function handleTaskUpdate(event: any, taskId: string, listId: string) {
                 checklists: taskData.checklists || [],
                 custom_fields: taskData.custom_fields || [],
                 creator: taskData.creator || {},
-                
+
                 // Context information
                 list_info: taskData.list || {},
                 project_info: taskData.project || {},
                 folder_info: taskData.folder || {},
                 space_info: taskData.space || {},
-                
+
                 // Time tracking
                 time_estimate: taskData.time_estimate || null,
                 time_spent: taskData.time_spent || null,
                 points: taskData.points || null,
-                
+
                 // URL
                 url: taskData.url,
             },

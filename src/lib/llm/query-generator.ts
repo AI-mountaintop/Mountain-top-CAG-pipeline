@@ -113,6 +113,15 @@ Table: "comments_CAG_custom"
 - created_at (TIMESTAMPTZ)
 - updated_at (TIMESTAMPTZ)
 
+Table: "task_due_date_history"
+- id (UUID, primary key)
+- task_id (UUID, foreign key to tasks_CAG_custom.id)
+- clickup_task_id (TEXT)
+- old_due_date (TIMESTAMPTZ, nullable) - Previous due date (null if first time setting)
+- new_due_date (TIMESTAMPTZ, nullable) - New due date (null if removed)
+- changed_at (TIMESTAMPTZ) - When the change happened
+- changed_by (JSONB, nullable) - User who made the change
+
 IMPORTANT: The updated_at field is automatically updated on any task modification and is indexed for efficient time-based queries.
 `;
 
@@ -188,6 +197,9 @@ Understand what users MEAN, not just what they SAY:
 | "urgent" | High priority tasks | priority ILIKE '%urgent%' OR priority ILIKE '%high%' |
 | "recent" / "latest" | Recently updated | ORDER BY updated_at DESC |
 | "old" / "oldest" | Oldest tasks | ORDER BY created_at ASC |
+| "deadline changed" | Tasks with due date changes | JOIN task_due_date_history |
+| "date changed X times" | Tasks with multiple deadline changes | JOIN + GROUP BY + HAVING COUNT > X |
+| "rescheduled tasks" | Tasks with due date changes | JOIN task_due_date_history |
 
 CRITICAL: OVERDUE/MISSED DEADLINE LOGIC
 - When user asks about "overdue", "missed deadline", "late", or "past due" tasks:
@@ -196,6 +208,13 @@ CRITICAL: OVERDUE/MISSED DEADLINE LOGIC
   - A task is overdue ONLY IF: due_date < NOW() AND it is NOT complete
   - Example: If due_date was Jan 5 but it's now Jan 20 and task is still open = OVERDUE
   - If task was due Jan 5 but completed on Jan 6, it is NOT overdue (it's done)
+
+CRITICAL: DUE DATE CHANGE HISTORY QUERIES
+- When user asks about "deadline changed", "date changed", "rescheduled", or "postponed" tasks:
+  - JOIN "task_due_date_history" h ON t.id = h.task_id
+  - Use COUNT(h.id) to count number of changes
+  - Use GROUP BY t.id to aggregate per task
+  - Use HAVING COUNT(h.id) > X to filter by number of changes
 
 === MANDATORY GUARDRAILS ===
 
@@ -207,7 +226,7 @@ CRITICAL: OVERDUE/MISSED DEADLINE LOGIC
 
 3. SELECT ONLY: No INSERT, UPDATE, DELETE, DROP, ALTER, GRANT
 
-4. TABLES: Only use "lists_CAG_custom", "tasks_CAG_custom", "comments_CAG_custom"
+4. TABLES: Only use "lists_CAG_custom", "tasks_CAG_custom", "comments_CAG_custom", "task_due_date_history"
 
 5. CASE-SENSITIVE TABLE NAMES: Always use double quotes: "tasks_CAG_custom"
 
@@ -272,6 +291,26 @@ Q: "tasks that are late"
 → Columns: name, url, due_date, status, assignees
 → Filter: due_date < NOW() AND status_type != 'closed'
 SQL: SELECT name, url, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status, assignees FROM "tasks_CAG_custom" WHERE list_id = $1 AND due_date < NOW() AND due_date IS NOT NULL AND status_type != 'closed' ORDER BY due_date ASC LIMIT 100
+
+Q: "tasks with deadline changes" or "tasks where due date was changed"
+→ Intent: LIST tasks that have had their due date modified at least once
+→ Tables: tasks_CAG_custom, task_due_date_history
+→ Columns: name, url, due_date, status, count of changes
+→ Filter: JOIN with history table and count
+SQL: SELECT t.name, t.url, TO_CHAR(t.due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, t.status, COUNT(h.id) as times_rescheduled FROM "tasks_CAG_custom" t JOIN "task_due_date_history" h ON t.id = h.task_id WHERE t.list_id = $1 GROUP BY t.id, t.name, t.url, t.due_date, t.status ORDER BY times_rescheduled DESC LIMIT 100
+
+Q: "tasks where deadline was changed more than 3 times"
+→ Intent: LIST tasks with multiple deadline changes (rescheduled frequently)
+→ Tables: tasks_CAG_custom, task_due_date_history
+→ Columns: name, url, due_date, status, change count
+→ Filter: JOIN + GROUP BY + HAVING COUNT > 3
+SQL: SELECT t.name, t.url, TO_CHAR(t.due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, t.status, COUNT(h.id) as times_rescheduled FROM "tasks_CAG_custom" t JOIN "task_due_date_history" h ON t.id = h.task_id WHERE t.list_id = $1 GROUP BY t.id, t.name, t.url, t.due_date, t.status HAVING COUNT(h.id) > 3 ORDER BY times_rescheduled DESC LIMIT 100
+
+Q: "show me rescheduled tasks"
+→ Intent: Same as deadline changed - tasks that have been postponed
+→ Tables: tasks_CAG_custom, task_due_date_history
+→ Columns: name, url, due_date, status, change count
+SQL: SELECT t.name, t.url, TO_CHAR(t.due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, t.status, COUNT(h.id) as times_rescheduled FROM "tasks_CAG_custom" t JOIN "task_due_date_history" h ON t.id = h.task_id WHERE t.list_id = $1 GROUP BY t.id, t.name, t.url, t.due_date, t.status ORDER BY times_rescheduled DESC LIMIT 100
 
 Your response should be ONLY the SQL query, nothing else. Do not include your analysis, explanations, markdown formatting, or any other text.`;
 
