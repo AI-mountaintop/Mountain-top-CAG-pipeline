@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Code } from 'lucide-react';
+import MarkdownRenderer from './markdown-renderer';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -59,6 +60,10 @@ export default function ChatInterface({ boardId }: ChatInterfaceProps) {
 
             const data = await response.json();
 
+            if (!response.ok) {
+                throw new Error(data.error || data.details?.[0]?.message || 'Failed to get response');
+            }
+
             const assistantMessage: Message = {
                 role: 'assistant',
                 content: data.answer,
@@ -92,8 +97,8 @@ export default function ChatInterface({ boardId }: ChatInterfaceProps) {
                 <button
                     onClick={() => setShowSql(!showSql)}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors ${showSql
-                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                            : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                         }`}
                 >
                     <Code size={16} />
@@ -129,11 +134,12 @@ export default function ChatInterface({ boardId }: ChatInterfaceProps) {
                         >
                             <div
                                 className={`max-w-[80%] rounded-lg p-4 ${message.role === 'user'
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
                                     }`}
                             >
-                                <div className="whitespace-pre-wrap">{message.content}</div>
+                                <div style={{ background: 'yellow', padding: '2px' }}>TEST: MarkdownRenderer loaded</div>
+                                <MarkdownRenderer content={message.content} />
                                 {message.sql && showSql && (
                                     <div className="mt-3 pt-3 border-t border-gray-300 dark:border-gray-600">
                                         <div className="text-xs font-mono bg-gray-800 text-gray-100 p-2 rounded overflow-x-auto">
@@ -170,7 +176,7 @@ export default function ChatInterface({ boardId }: ChatInterfaceProps) {
                         type="text"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        placeholder="Ask a question about your Trello board..."
+                        placeholder="Ask a question about your ClickUp list..."
                         className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                         disabled={loading}
                     />

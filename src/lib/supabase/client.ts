@@ -11,55 +11,62 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey);
 
 // Type definitions for database tables
-export interface Board {
+// Type definitions for database tables
+export interface List {
   id: string;
-  trello_board_id: string;
+  clickup_list_id: string;
   name: string;
   url: string;
-  description?: string;
+  space_id: string;
+  space_name: string;
+  folder_id?: string;
+  folder_name?: string;
+  workspace_id: string;
+  workspace_name: string;
   last_synced?: string;
   created_at: string;
   updated_at: string;
 }
 
-export interface List {
+export interface Task {
   id: string;
-  board_id: string;
-  trello_list_id: string;
+  list_id: string;
+  clickup_task_id: string;
   name: string;
-  position: number;
-  is_closed: boolean;
+  description?: string;
+  text_content?: string;
+  status?: string;
+  priority?: string;
+  due_date?: string;
+  start_date?: string;
+  date_closed?: string;
+  date_done?: string;
+  assignees: any[];
+  tags: any[];
+  url: string;
   created_at: string;
   updated_at: string;
 }
 
-export interface Card {
+export interface Comment {
   id: string;
-  board_id: string;
-  list_id?: string;
-  trello_card_id: string;
-  name: string;
-  description?: string;
-  position: number;
-  due_date?: string;
-  due_complete: boolean;
-  is_closed: boolean;
-  labels: Array<{ id: string; name: string; color: string }>;
-  members: Array<{ id: string; username: string; fullName: string }>;
-  checklists: any[];
-  attachments: any[];
-  status?: string;
-  url?: string;
+  task_id: string;
+  clickup_id: string;
+  text?: string;
+  comment_text?: string;
+  user: any;
+  date: string;
   created_at: string;
-  updated_at: string;
 }
 
 export interface Webhook {
   id: string;
-  board_id: string;
-  trello_webhook_id: string;
+  list_id: string;
+  clickup_webhook_id: string;
   callback_url: string;
   is_active: boolean;
   last_event_at?: string;
   created_at: string;
 }
+
+

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Code, MessageSquare } from 'lucide-react';
+import MarkdownRenderer from './markdown-renderer';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -174,7 +175,7 @@ export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedPro
                                     : 'bg-gray-100 text-gray-900'
                                     }`}
                             >
-                                <div className="whitespace-pre-wrap">{message.content}</div>
+                                <MarkdownRenderer content={message.content} />
                                 {message.sql && showSql && (
                                     <div className="mt-3 pt-3 border-t border-gray-300">
                                         <div className="text-xs font-mono bg-[#1a1f36] text-gray-100 p-2 rounded overflow-x-auto">
@@ -211,7 +212,7 @@ export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedPro
                         onChange={(e) => setInput(e.target.value)}
                         placeholder={
                             selectedBoardId
-                                ? 'Ask a question about your Trello board...'
+                                ? 'Ask a question about your ClickUp list...'
                                 : 'Select a board first...'
                         }
                         className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#ff6b35] focus:border-transparent bg-white text-gray-900 disabled:bg-gray-100 disabled:cursor-not-allowed"

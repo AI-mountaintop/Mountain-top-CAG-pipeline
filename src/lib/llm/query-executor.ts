@@ -1,9 +1,51 @@
 import { supabaseAdmin } from '../supabase/client';
 import OpenAI from 'openai';
+import { openaiRateLimiter, openaiSecondRateLimiter } from '../utils/rate-limiter';
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || 'sk-placeholder',
 });
+
+/**
+ * Retry OpenAI API call with exponential backoff on rate limit errors
+ */
+async function retryOpenAICall<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 5,
+    baseDelay: number = 1000
+): Promise<T> {
+    let lastError: any;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+
+            // Check if it's a rate limit error (429)
+            if (error?.status === 429 || error?.message?.includes('Rate limit')) {
+                // Extract retry-after from error message if available
+                let retryAfter = baseDelay;
+                const retryAfterMatch = error?.message?.match(/try again in ([\d.]+)s/i);
+                if (retryAfterMatch) {
+                    retryAfter = Math.ceil(parseFloat(retryAfterMatch[1]) * 1000) + 500; // Add 500ms buffer
+                } else {
+                    // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                    retryAfter = baseDelay * Math.pow(2, attempt);
+                }
+
+                console.log(`Rate limit hit in formatResponse, retrying in ${retryAfter}ms (attempt ${attempt + 1}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, retryAfter));
+                continue;
+            }
+
+            // For other errors, throw immediately
+            throw error;
+        }
+    }
+
+    throw lastError;
+}
 
 /**
  * Execute a validated SQL query against Supabase
@@ -84,6 +126,122 @@ export async function executeQuerySafe(
 }
 
 /**
+ * Format date values to human-readable strings
+ */
+function formatDateValue(value: any): any {
+    if (value === null || value === undefined) {
+        return value;
+    }
+
+    // If it's already a string that looks like a date, try to parse it
+    if (typeof value === 'string') {
+        const date = new Date(value);
+        if (!isNaN(date.getTime())) {
+            return date.toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZoneName: 'short'
+            });
+        }
+    }
+
+    // If it's a number, try to interpret it as a timestamp or date serial
+    if (typeof value === 'number') {
+        // Check if it's a Unix timestamp (milliseconds - 13 digits, or seconds - 10 digits)
+        if (value > 1000000000000) {
+            // Milliseconds timestamp
+            const date = new Date(value);
+            if (!isNaN(date.getTime())) {
+                return date.toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short'
+                });
+            }
+        } else if (value > 1000000000) {
+            // Seconds timestamp
+            const date = new Date(value * 1000);
+            if (!isNaN(date.getTime())) {
+                return date.toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short'
+                });
+            }
+        } else if (value > 0 && value < 100000) {
+            // Could be a date serial number (days since 1900-01-01, like Excel)
+            // PostgreSQL might return dates as days since 2000-01-01 or similar
+            // Try both common epoch dates
+            const date1900 = new Date(1900, 0, 1);
+            date1900.setDate(date1900.getDate() + Math.floor(value) - 1); // -1 because Excel counts from 1
+
+            const date2000 = new Date(2000, 0, 1);
+            date2000.setDate(date2000.getDate() + Math.floor(value));
+
+            // Check which one makes more sense (should be a recent date)
+            const now = new Date();
+            const diff1900 = Math.abs(now.getTime() - date1900.getTime());
+            const diff2000 = Math.abs(now.getTime() - date2000.getTime());
+
+            const date = diff2000 < diff1900 ? date2000 : date1900;
+
+            if (!isNaN(date.getTime()) && date.getFullYear() > 2000 && date.getFullYear() < 2100) {
+                return date.toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short'
+                });
+            }
+        }
+    }
+
+    return value;
+}
+
+/**
+ * Recursively format dates in an object
+ */
+function formatDatesInObject(obj: any): any {
+    if (obj === null || obj === undefined) {
+        return obj;
+    }
+
+    if (Array.isArray(obj)) {
+        return obj.map(item => formatDatesInObject(item));
+    }
+
+    if (typeof obj === 'object') {
+        const formatted: any = {};
+        for (const [key, value] of Object.entries(obj)) {
+            // Check if key contains date-related terms
+            if (key.toLowerCase().includes('date') ||
+                key.toLowerCase().includes('updated_at') ||
+                key.toLowerCase().includes('created_at') ||
+                key.toLowerCase().includes('time')) {
+                formatted[key] = formatDateValue(value);
+            } else {
+                formatted[key] = formatDatesInObject(value);
+            }
+        }
+        return formatted;
+    }
+
+    return obj;
+}
+
+/**
  * Format query results into natural language response
  */
 export async function formatResponse(
@@ -97,33 +255,54 @@ export async function formatResponse(
             return `I couldn't find any results for your question: "${question}". Try rephrasing or asking about different data.`;
         }
 
+        // Format dates in results before sending to LLM
+        const formattedResults = formatDatesInObject(results);
+
         // For large result sets, provide summary
         const resultSummary =
-            results.length > 10
-                ? `Found ${results.length} results. Here are the first 10:\n${JSON.stringify(results.slice(0, 10), null, 2)}`
-                : JSON.stringify(results, null, 2);
+            formattedResults.length > 10
+                ? `Found ${formattedResults.length} results. Here are the first 10:\n${JSON.stringify(formattedResults.slice(0, 10), null, 2)}`
+                : JSON.stringify(formattedResults, null, 2);
 
-        // Use LLM to format results naturally
-        const response = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-                {
-                    role: 'system',
-                    content: `You are a helpful assistant that converts database query results into clear, concise human-readable summaries. 
-          
-Format the results in a user-friendly way:
-- Use bullet points or numbered lists for multiple items
-- Include relevant details (names, dates, counts)
-- Be concise but informative
-- If there are many results, provide a summary with key insights
-- Use markdown formatting for better readability`,
-                },
-                {
-                    role: 'user',
-                    content: `Question: "${question}"\n\nSQL Query: ${sql}\n\nResults (${results.length} rows):\n${resultSummary}\n\nPlease provide a clear, human-readable summary of these results.`,
-                },
-            ],
-            temperature: 0.3,
+        // Wait for rate limit slots before making API call
+        await openaiRateLimiter.waitForSlot('openai-api');
+        await openaiSecondRateLimiter.waitForSlot('openai-api-second');
+
+        // Use LLM to format results naturally with retry logic
+        const response = await retryOpenAICall(async () => {
+            return await openai.chat.completions.create({
+                model: 'gpt-4o-mini',
+                messages: [
+                    {
+                        role: 'system',
+                        content: `You are a helpful assistant that converts database query results into clear, concise human-readable summaries.
+
+FORMATTING RULES:
+- Use bullet points (with -) for listing tasks, NOT numbered lists
+- For each task, format as: **Task Name** - [View Card](url)
+- Do NOT include "Updated at" or "Created at" timestamps unless specifically asked
+- Keep the response clean and scannable
+- Use markdown: headers (##), bold (**text**), and bullet points (-)
+- If there are due dates in the data, show them on the same line as the task
+- Dates are already formatted - use them as-is
+
+EXAMPLE:
+## Tasks with No Due Date
+- **Task Name 1** - [View Card](https://app.clickup.com/t/xxx)
+- **Task Name 2** - [View Card](https://app.clickup.com/t/yyy)`,
+                    },
+                    {
+                        role: 'user',
+                        content: `Question: "${question}"
+
+Results (${formattedResults.length} items):
+${resultSummary}
+
+Provide a clean, scannable summary. Use bullet points (not numbered lists). Format each task as: **Task Name** - [View Card](url). Do not include Updated at or Created at timestamps.`,
+                    },
+                ],
+                temperature: 0.3,
+            });
         });
 
         const formattedResponse =

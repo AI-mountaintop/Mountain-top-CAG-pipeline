@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/client';
 import { z } from 'zod';
 
 const chatSchema = z.object({
-    boardId: z.string().uuid('Invalid board ID'),
+    boardId: z.string().min(1, 'List/Folder ID is required'), // Allow numeric folder IDs
     question: z.string().min(1, 'Question cannot be empty'),
     history: z.array(z.object({
         role: z.enum(['user', 'assistant']),
@@ -19,34 +19,50 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const { boardId, question, history } = chatSchema.parse(body);
 
-        // Verify board exists
-        const { data: board, error: boardError } = await supabaseAdmin
-            .from('boards')
+        // Verify list or folder exists
+        let scope: 'list' | 'folder' = 'list';
+
+        // First check if it's a list
+        const { data: list } = await supabaseAdmin
+            .from('lists_CAG_custom')
             .select('id, name')
             .eq('id', boardId)
             .single();
 
-        if (boardError || !board) {
-            return NextResponse.json(
-                { error: 'Board not found' },
-                { status: 404 }
-            );
+        if (!list) {
+            // Check if it's a folder (by checking if any list has this folder_id)
+            const { data: folderList } = await supabaseAdmin
+                .from('lists_CAG_custom')
+                .select('folder_id, folder_name')
+                .eq('folder_id', boardId)
+                .limit(1)
+                .single();
+
+            if (folderList) {
+                scope = 'folder';
+            } else {
+                return NextResponse.json(
+                    { error: 'List or Folder not found' },
+                    { status: 404 }
+                );
+            }
         }
 
         // Generate SQL query from natural language with context
-        const { sql, explanation } = await generateSQL(question, boardId, history || []);
+        const { sql, explanation } = await generateSQL(question, boardId, history || [], scope);
 
         console.log('Generated SQL:', sql);
         console.log('Explanation:', explanation);
 
-        // Execute the query with parameterized board_id
-        // Replace $1 with actual boardId (properly escaped)
+        // Execute the query with parameterized list_id
+        // Replace $1 with actual listId (properly escaped)
         const safeSql = sql.replace(/\$1/g, `'${boardId}'`);
 
         // Execute using Supabase's query builder as a workaround
         // Note: For production, you should set up a PostgreSQL function
         // CREATE FUNCTION execute_user_query(query_text text) ...
 
+        // Execute using Supabase's query builder as a workaround
         // For this implementation, we'll parse and execute using the query builder
         const results = await executeSQLQuery(safeSql);
 
@@ -118,7 +134,15 @@ async function executeSQLQuery(sql: string): Promise<any[]> {
             );
         }
 
-        return data || [];
+        if (!data) return [];
+
+        if (Array.isArray(data)) {
+            return data;
+        }
+
+        // If data is an object but not an array, it might be a single result or wrapped
+        console.warn('RPC returned non-array data:', data);
+        return [data];
     } catch (error) {
         console.error('SQL execution error:', error);
         throw error;

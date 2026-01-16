@@ -67,7 +67,7 @@ export default function BoardsList() {
                     No Boards Added Yet
                 </h3>
                 <p className="text-gray-500">
-                    Click "Enter Board" to add your first Trello board
+                    Click "Enter Board" to add your first ClickUp list
                 </p>
             </div>
         );

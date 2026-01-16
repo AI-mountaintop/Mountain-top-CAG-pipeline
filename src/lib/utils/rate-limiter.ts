@@ -22,7 +22,7 @@ export class RateLimiter {
 
     /**
      * Check if request is allowed and record it
-     * @param key Identifier for the rate limit bucket (e.g., 'trello-api')
+     * @param key Identifier for the rate limit bucket (e.g., 'clickup-api')
      * @returns true if request is allowed, false if rate limited
      */
     async checkLimit(key: string): Promise<boolean> {
@@ -104,7 +104,14 @@ export class RateLimiter {
     }
 }
 
-// Pre-configured rate limiters for Trello API
-// Trello limits: 100 requests per 10 seconds, 300 per 5 minutes
-export const trelloRateLimiter = new RateLimiter(100, 10 * 1000); // 100 per 10 seconds
-export const trelloMinuteRateLimiter = new RateLimiter(300, 5 * 60 * 1000); // 300 per 5 minutes
+// Pre-configured rate limiters for ClickUp API
+// ClickUp limits: 100 requests per minute per workspace
+export const clickupRateLimiter = new RateLimiter(100, 60 * 1000); // 100 per minute
+export const clickupMinuteRateLimiter = new RateLimiter(100, 60 * 1000); // Same limit for consistency
+
+// OpenAI rate limiter
+// OpenAI limits: ~30,000 tokens per minute for gpt-4o
+// We'll be conservative: limit to ~20 requests per minute (assuming ~1500 tokens per request)
+// Also add a per-second limiter to avoid bursts
+export const openaiRateLimiter = new RateLimiter(20, 60 * 1000); // 20 requests per minute
+export const openaiSecondRateLimiter = new RateLimiter(3, 1000); // 3 requests per second max

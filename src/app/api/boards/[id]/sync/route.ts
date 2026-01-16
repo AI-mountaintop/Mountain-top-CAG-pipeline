@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/client';
-import { syncBoard } from '@/lib/trello/sync';
+import { syncList } from '@/lib/clickup/sync';
 
 export async function POST(
     request: NextRequest,
@@ -8,37 +8,37 @@ export async function POST(
 ) {
     try {
         const { id } = await params;
-        const boardId = id;
+        const listId = id;
 
-        // 1. Get board URL from database
-        const { data: board, error } = await supabaseAdmin
-            .from('boards')
+        // 1. Get list URL from database
+        const { data: list, error } = await supabaseAdmin
+            .from('lists_CAG_custom')
             .select('url, name')
-            .eq('id', boardId)
+            .eq('id', listId)
             .single();
 
-        if (error || !board) {
+        if (error || !list) {
             return NextResponse.json(
-                { error: 'Board not found' },
+                { error: 'List not found' },
                 { status: 404 }
             );
         }
 
-        console.log(`Manual sync triggered for board: ${board.name} (${boardId})`);
+        console.log(`Manual sync triggered for list: ${list.name} (${listId})`);
 
         // 2. Trigger sync
-        const result = await syncBoard(board.url);
+        const result = await syncList(list.url);
 
         return NextResponse.json({
             success: true,
-            message: 'Board synced successfully',
+            message: 'List synced successfully',
             stats: result.stats,
             last_synced: new Date().toISOString()
         });
     } catch (error: any) {
         console.error('Sync API error:', error);
         return NextResponse.json(
-            { error: error.message || 'Failed to sync board' },
+            { error: error.message || 'Failed to sync list' },
             { status: 500 }
         );
     }

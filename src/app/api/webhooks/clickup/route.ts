@@ -1,20 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { trelloClient } from '@/lib/trello/client';
-import { handleWebhookEvent } from '@/lib/trello/webhook-handler';
+import { clickupClient } from '@/lib/clickup/client';
+import { handleWebhookEvent } from '@/lib/clickup/webhook-handler';
 
-const WEBHOOK_CALLBACK_URL = process.env.TRELLO_WEBHOOK_CALLBACK_URL!;
-
-/**
- * HEAD request for webhook verification
- * Trello sends a HEAD request to verify the callback URL
- */
-export async function HEAD(request: NextRequest) {
-    return new NextResponse(null, { status: 200 });
-}
+const WEBHOOK_CALLBACK_URL = process.env.CLICKUP_WEBHOOK_CALLBACK_URL!;
 
 /**
  * POST request for webhook events
- * Trello sends card/list updates here
+ * ClickUp sends task/comment updates here
  */
 export async function POST(request: NextRequest) {
     try {
@@ -22,9 +14,9 @@ export async function POST(request: NextRequest) {
         const payload = JSON.parse(body);
 
         // Verify webhook signature
-        const signature = request.headers.get('x-trello-webhook') || '';
+        const signature = request.headers.get('x-signature') || '';
 
-        if (!trelloClient.verifyWebhookSignature(body, signature, WEBHOOK_CALLBACK_URL)) {
+        if (!clickupClient.verifyWebhookSignature(body, signature)) {
             console.error('Invalid webhook signature');
             return NextResponse.json(
                 { error: 'Invalid signature' },
@@ -33,7 +25,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Process webhook event asynchronously
-        // We return 200 immediately to prevent Trello from timing out
+        // We return 200 immediately to prevent ClickUp from timing out
         handleWebhookEvent(payload).catch((error) => {
             console.error('Async webhook processing error:', error);
         });
@@ -42,7 +34,7 @@ export async function POST(request: NextRequest) {
     } catch (error: any) {
         console.error('Webhook handler error:', error);
 
-        // Always return 200 to prevent Trello from deactivating the webhook
+        // Always return 200 to prevent ClickUp from deactivating the webhook
         return NextResponse.json(
             { success: true, error: 'Internal error but acknowledged' },
             { status: 200 }

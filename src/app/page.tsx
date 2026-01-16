@@ -5,6 +5,7 @@ import Sidebar from '@/components/sidebar';
 import BoardManager from '@/components/board-manager';
 import BoardsList from '@/components/boards-list';
 import ChatInterfaceUpdated from '@/components/chat-interface-updated';
+import TestCasesUpload from '@/components/test-cases-upload';
 
 interface Board {
   id: string;
@@ -17,7 +18,7 @@ interface Board {
 }
 
 export default function Home() {
-  const [activeView, setActiveView] = useState<'add-board' | 'boards' | 'chat'>('boards');
+  const [activeView, setActiveView] = useState<'add-board' | 'boards' | 'chat' | 'test-cases'>('boards');
   const [boards, setBoards] = useState<Board[]>([]);
 
   useEffect(() => {
@@ -50,14 +51,14 @@ export default function Home() {
     const syncAllBoards = async () => {
       if (boards.length === 0) return;
 
-      console.log('Starting periodic hard sync for all boards...');
+      console.log('Starting periodic hard sync for all lists...');
 
       for (const board of boards) {
         try {
           await fetch(`/api/boards/${board.id}/sync`, { method: 'POST' });
-          console.log(`Synced board: ${board.name}`);
+          console.log(`Synced list: ${board.name}`);
         } catch (error) {
-          console.error(`Failed to sync board ${board.name}:`, error);
+          console.error(`Failed to sync list ${board.name}:`, error);
         }
       }
 
@@ -71,16 +72,16 @@ export default function Home() {
   }, [boards]);
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-white">
       {/* Left Sidebar */}
       <Sidebar activeView={activeView} onViewChange={setActiveView} />
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto bg-white">
         {activeView === 'add-board' && (
           <div className="p-6">
             <h2 className="text-3xl font-bold text-[#1a1f36] mb-6">
-              Add Trello Board
+              Add ClickUp List
             </h2>
             <BoardManager
               onBoardSelect={() => { }}
@@ -94,6 +95,14 @@ export default function Home() {
         {activeView === 'chat' && (
           <div className="p-6 h-screen flex flex-col">
             <ChatInterfaceUpdated
+              boards={boards.map((b) => ({ id: b.id, name: b.name }))}
+            />
+          </div>
+        )}
+
+        {activeView === 'test-cases' && (
+          <div className="p-6">
+            <TestCasesUpload
               boards={boards.map((b) => ({ id: b.id, name: b.name }))}
             />
           </div>

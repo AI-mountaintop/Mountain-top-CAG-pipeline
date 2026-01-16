@@ -1,13 +1,13 @@
-# Trello Intelligence
+# ClickUp Intelligence
 
-Production-grade, event-driven Trello analytics application powered by AI. Ask natural language questions about your Trello boards and get instant insights.
+Production-grade, event-driven ClickUp analytics application powered by AI. Ask natural language questions about your ClickUp lists and get instant insights.
 
 ## 🚀 Features
 
-- **Zero Polling Architecture**: Real-time updates via Trello webhooks
+- **Zero Polling Architecture**: Real-time updates via ClickUp webhooks
 - **AI-Powered Querying**: Ask questions in natural language, get SQL-based insights
-- **Multi-Board Support**: Manage and query 100+ boards efficiently
-- **Strict Security Guardrails**: Read-only queries with board scoping and result limits
+- **Multi-List Support**: Manage and query 100+ lists efficiently
+- **Strict Security Guardrails**: Read-only queries with list scoping and result limits
 - **Denormalized Schema**: Optimized for fast analytical queries
 - **Time-Based Filters**: Query changes by time without scheduled syncs
 - **Modular Design**: Easily extensible to other tools (Jira, Asana, etc.)
@@ -16,7 +16,7 @@ Production-grade, event-driven Trello analytics application powered by AI. Ask n
 
 ```
 ┌─────────────────┐
-│  Trello Boards  │
+│  ClickUp Lists  │
 └────────┬────────┘
          │ Webhooks
          ▼
@@ -35,10 +35,10 @@ Production-grade, event-driven Trello analytics application powered by AI. Ask n
 ## 📋 Prerequisites
 
 1. **Supabase Account**: [Create free account](https://supabase.com)
-2. **Trello API Credentials**:
-   - Get your API key: https://trello.com/app-key
-   - Generate a token (click the token link on the API key page)
-   - Note your API secret (shown on the API key page)
+2. **ClickUp API Credentials**:
+   - Get your API token: https://app.clickup.com/settings/apps
+   - Create an app in ClickUp settings to get Client ID
+   - Generate a webhook secret for signature verification
 3. **OpenAI API Key**: [Get API key](https://platform.openai.com/api-keys)
 4. **Public HTTPS URL** for webhooks:
    - For development: Use [ngrok](https://ngrok.com) or [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
@@ -49,7 +49,7 @@ Production-grade, event-driven Trello analytics application powered by AI. Ask n
 ### 1. Clone and Install Dependencies
 
 ```bash
-cd trello-intelligence
+cd clickup-intelligence
 npm install
 ```
 
@@ -60,6 +60,7 @@ npm install
 3. Run the migration files in order:
    - Copy and execute `supabase/migrations/001_initial_schema.sql`
    - Copy and execute `supabase/migrations/002_query_function.sql`
+   - Copy and execute `supabase/migrations/003_comments_table.sql`
 4. Get your project credentials:
    - **Project URL**: Settings → API → Project URL
    - **Anon Key**: Settings → API → anon/public key
@@ -81,11 +82,11 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
-# Trello
-TRELLO_API_KEY=your-trello-api-key
-TRELLO_API_TOKEN=your-trello-token
-TRELLO_API_SECRET=your-trello-secret
-TRELLO_WEBHOOK_CALLBACK_URL=https://your-domain.com/api/webhooks/trello
+# ClickUp
+CLICKUP_API_TOKEN=your-clickup-api-token
+CLICKUP_CLIENT_ID=your-clickup-client-id
+CLICKUP_WEBHOOK_SECRET=your-webhook-secret
+CLICKUP_WEBHOOK_CALLBACK_URL=https://your-domain.com/api/webhooks/clickup
 
 # OpenAI
 OPENAI_API_KEY=your-openai-api-key
@@ -101,7 +102,7 @@ ngrok http 3000
 
 # Copy the HTTPS URL (e.g., https://abc123.ngrok.io)
 # Update .env.local:
-# TRELLO_WEBHOOK_CALLBACK_URL=https://abc123.ngrok.io/api/webhooks/trello
+# CLICKUP_WEBHOOK_CALLBACK_URL=https://abc123.ngrok.io/api/webhooks/clickup
 ```
 
 **For Production**:
@@ -117,35 +118,36 @@ Open http://localhost:3000
 
 ## 📖 Usage Guide
 
-### Adding a Board
+### Adding a List
 
-1. Copy your Trello board URL (e.g., `https://trello.com/b/abc123/my-board`)
-2. Paste it into the "Add Trello Board" input
-3. Click "Add & Sync Board"
-4. Wait for initial sync to complete (fetches all lists and cards)
+1. Copy your ClickUp list URL (e.g., `https://app.clickup.com/{workspaceId}/v/li/{listId}/...`)
+2. Paste it into the "Add ClickUp List" input
+3. Click "Add & Sync List"
+4. Wait for initial sync to complete (fetches all tasks and comments)
 5. Webhook is automatically registered for real-time updates
 
 ### Querying with Natural Language
 
-Select a board and ask questions like:
+Select a list and ask questions like:
 
-- "What cards are due this week?"
-- "Show me all cards in the 'In Progress' list"
+- "What tasks are due this week?"
+- "Show me all tasks with status 'In Progress'"
 - "What changed in the last 10 minutes?"
-- "Which cards have no due date?"
-- "Show me cards with the 'urgent' label"
-- "How many cards are in each list?"
+- "Which tasks have no due date?"
+- "Show me tasks with the 'urgent' tag"
+- "Show me tasks assigned to John"
+- "How many tasks are in each status?"
 
 ### Understanding Time-Based Queries
 
-The system tracks the `updated_at` timestamp for every card. When you ask "What changed in the last X minutes/hours", it queries this field directly—no polling needed!
+The system tracks the `updated_at` timestamp for every task. When you ask "What changed in the last X minutes/hours", it queries this field directly—no polling needed!
 
 ## 🔒 Security Features
 
-- **Board Scoping**: All queries must include `WHERE board_id = $1`
+- **List Scoping**: All queries must include `WHERE list_id = $1`
 - **Read-Only**: No INSERT, UPDATE, DELETE, or DDL operations allowed
 - **Result Limits**: Maximum 1000 rows per query
-- **Webhook Signature Validation**: HMAC-SHA1 verification for all webhook events
+- **Webhook Signature Validation**: HMAC-SHA256 verification for all webhook events
 - **Parameterized Queries**: SQL injection prevention
 
 ## 🧪 Testing
@@ -155,12 +157,12 @@ The system tracks the `updated_at` timestamp for every card. When you ask "What 
 ```bash
 curl -X POST http://localhost:3000/api/boards/add \
   -H "Content-Type: application/json" \
-  -d '{"boardUrl": "https://trello.com/b/YOUR_BOARD_ID/board-name"}'
+  -d '{"boardUrl": "https://app.clickup.com/.../li/YOUR_LIST_ID/..."}'
 ```
 
-### Test Webhook (simulate Trello event)
+### Test Webhook (simulate ClickUp event)
 
-1. Make a change to a card in Trello
+1. Make a change to a task in ClickUp
 2. Check your terminal for webhook event logs
 3. Verify the `updated_at` timestamp changed in Supabase
 
@@ -172,8 +174,8 @@ Use the chat interface or:
 curl -X POST http://localhost:3000/api/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "boardId": "your-board-uuid",
-    "question": "What cards are due this week?"
+    "boardId": "your-list-uuid",
+    "question": "What tasks are due this week?"
   }'
 ```
 
@@ -189,7 +191,7 @@ npm i -g vercel
 vercel
 
 # Set environment variables in Vercel dashboard
-# Update TRELLO_WEBHOOK_CALLBACK_URL with production URL
+# Update CLICKUP_WEBHOOK_CALLBACK_URL with production URL
 ```
 
 ### Deploy to Railway
@@ -202,35 +204,43 @@ vercel
 ## 📊 Database Schema
 
 ```sql
-boards
-├── id (UUID, PK)
-├── trello_board_id (TEXT, unique)
-├── name, url, description
-└── last_synced, created_at, updated_at
-
 lists
 ├── id (UUID, PK)
-├── board_id (FK → boards.id)
-├── trello_list_id (TEXT, unique)
-├── name, position, is_closed
-└── created_at, updated_at
+├── clickup_list_id (TEXT, unique)
+├── name, url, description
+├── space_id, space_name
+├── folder_id, folder_name (nullable)
+├── workspace_id, workspace_name
+└── last_synced, created_at, updated_at
 
-cards
+tasks
 ├── id (UUID, PK)
-├── board_id (FK → boards.id)
-├── list_id (FK → lists.id, nullable)
-├── trello_card_id (TEXT, unique)
-├── name, description, position
-├── due_date, due_complete, is_closed
-├── labels (JSONB), members (JSONB)
-├── checklists (JSONB), attachments (JSONB)
-├── status, url
+├── list_id (FK → lists.id)
+├── clickup_task_id (TEXT, unique)
+├── name, description, text_content
+├── position, due_date, start_date
+├── status, status_color, status_type
+├── priority, priority_color
+├── tags (JSONB), assignees (JSONB), watchers (JSONB)
+├── checklists (JSONB), custom_fields (JSONB)
+├── creator (JSONB)
+├── time_estimate, time_spent, points
+├── url
 └── created_at, updated_at (INDEXED)
+
+comments
+├── id (UUID, PK)
+├── task_id (FK → tasks.id)
+├── clickup_id (TEXT, unique)
+├── text, comment_text
+├── user (JSONB), assignee (JSONB), assigned_by (JSONB)
+├── reactions (JSONB)
+└── date, created_at, updated_at
 
 webhooks
 ├── id (UUID, PK)
-├── board_id (FK → boards.id)
-├── trello_webhook_id (TEXT, unique)
+├── list_id (FK → lists.id)
+├── clickup_webhook_id (TEXT, unique)
 ├── callback_url, is_active
 └── last_event_at, created_at
 ```
@@ -239,10 +249,10 @@ webhooks
 
 ### Webhook Not Receiving Events
 
-1. Check `TRELLO_WEBHOOK_CALLBACK_URL` is publicly accessible
+1. Check `CLICKUP_WEBHOOK_CALLBACK_URL` is publicly accessible
 2. Verify webhook signature validation isn't failing
 3. Check Supabase `webhooks` table for `is_active = true`
-4. Look for webhook ID in Trello: `https://trello.com/1/tokens/YOUR_TOKEN/webhooks`
+4. Look for webhook ID in ClickUp: Check your app settings
 
 ### SQL Query Execution Fails
 
@@ -252,13 +262,13 @@ webhooks
 
 ### Rate Limiting
 
-Trello limits: 100 requests/10 seconds, 300 requests/5 minutes. The client automatically handles this with the rate limiter.
+ClickUp limits: 100 requests per minute per workspace. The client automatically handles this with the rate limiter.
 
 ## 🛣️ Roadmap
 
-- [ ] Add search functionality for boards
+- [ ] Add search functionality for lists
 - [ ] Export query results to CSV
-- [ ] Card activity timeline visualization
+- [ ] Task activity timeline visualization
 - [ ] Slack/Discord notifications for changes
 - [ ] Multi-workspace support
 - [ ] Jira and Asana integrations
@@ -275,4 +285,4 @@ Contributions welcome! Please open an issue or PR.
 
 ---
 
-Built with ❤️ using Next.js, Supabase, OpenAI, and Trello API
+Built with ❤️ using Next.js, Supabase, OpenAI, and ClickUp API
