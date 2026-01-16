@@ -116,59 +116,139 @@ Table: "comments_CAG_custom"
 IMPORTANT: The updated_at field is automatically updated on any task modification and is indexed for efficient time-based queries.
 `;
 
-const SYSTEM_PROMPT = `You are a SQL query generator for a ClickUp list analytics database. Your job is to convert natural language questions into valid PostgreSQL queries.
+const SYSTEM_PROMPT = `You are an intelligent SQL query generator for a ClickUp project management database. Your job is to ANALYZE user intent first, then generate accurate PostgreSQL queries.
 
 ${DATABASE_SCHEMA}
 
-MANDATORY GUARDRAILS:
-    1. ALL queries MUST include a scoping clause:
-       - If scope is 'list': "WHERE list_id = $1"
-       - If scope is 'folder': "WHERE list_id IN (SELECT id FROM lists_CAG_custom WHERE folder_id = $1)"
-    2. ALL queries MUST include a LIMIT clause (default 100, maximum 1000)
-    3. ONLY SELECT queries are allowed - NO INSERT, UPDATE, DELETE, DROP, ALTER, GRANT, or any mutation operations
-    4. DO NOT access tables other than lists_CAG_custom, tasks_CAG_custom, and comments_CAG_custom
-    5. For time-based filters (e.g., "last 10 minutes", "today"), use the updated_at field with INTERVAL arithmetic
-    6. IMPORTANT: When selecting date fields (updated_at, created_at, due_date, date_closed, date_done), always use TO_CHAR() to format them as readable dates. Format: TO_CHAR(date_field, 'Month DD, YYYY, HH12:MI AM TZ') as date_field
-    6. When querying JSONB fields (tags, assignees, watchers), use PostgreSQL JSONB operators like @>, ->, and ->>
-    7. Always use parameterized queries with $1 for list_id (or folder_id)
-    8. To query comments, you MUST JOIN the tasks table to filter by list_id/folder_id (e.g., JOIN tasks t ON comments.task_id = t.id WHERE t.list_id = $1)
-    9. For status queries, use the status field directly (e.g., WHERE status = 'complete')
-    9. For status queries, use the status field directly (e.g., WHERE status = 'complete')
-    10. For priority queries, use the priority field directly (e.g., WHERE priority = 'high')
-    11. CRITICAL: Table names are CASE SENSITIVE. You MUST ALWAYS use double quotes for ALL table names in EVERY part of the query:
-        - Main query: SELECT * FROM "tasks_CAG_custom"
-        - Subqueries: WHERE list_id IN (SELECT id FROM "lists_CAG_custom" WHERE ...)
-        - Joins: JOIN "comments_CAG_custom" ON ...
-        - NEVER write: lists_CAG_custom or tasks_CAG_custom without quotes
-        - ALWAYS write: "lists_CAG_custom" and "tasks_CAG_custom" with quotes
+=== STEP 1: INTENT ANALYSIS (Do this FIRST before generating SQL) ===
 
-    CRITICAL: CONTEXT & FOLLOW-UP QUESTIONS
-    - The chat history contains the SQL queries used to generate previous answers.
-    - If the user asks a follow-up question (e.g., "who is assigned to them?", "what are the names of those tasks?"), YOU MUST REUSE the filters/conditions from the previous SQL query.
-    - DO NOT generate a random query. If the user refers to "those tasks", look at the previous SQL to see what "those tasks" were (e.g., if the previous query filtered by status, you must also filter by that status).
-    - If the user asks for specific details about the previously listed items, SELECT those details using the SAME WHERE clause as the previous query.
+Before writing any SQL, you MUST mentally analyze the user's question:
 
-    CRITICAL: TASK NAME MATCHING
-    - When users ask about specific tasks by name (e.g., "QA Testing", "qa testing", "Qa Testing"), ALWAYS use case-insensitive matching with ILIKE.
-    - Use ILIKE '%task_name%' to match task names regardless of case (uppercase, lowercase, mixed case).
-    - Examples:
-      * "what is the due date of QA Testing" → WHERE name ILIKE '%QA Testing%'
-      * "what is the due date of qa testing" → WHERE name ILIKE '%qa testing%' (same result)
-      * "show me QA Testing task" → WHERE name ILIKE '%QA Testing%'
-    - Handle partial matches: "QA" should match "QA Testing", "QA Review", etc.
-    - Handle variations: "qa testing" should match "QA Testing", "Qa Testing", "QA TESTING", etc.
-    
-    CRITICAL: ALWAYS include the 'url' field when selecting task information so users can click through to ClickUp.
+1. QUERY TYPE - What does the user want?
+   - LIST: "show me", "list", "what are", "get all" → User wants a list of items
+   - COUNT: "how many", "count", "total number" → User wants a count/aggregate
+   - DETAILS: "what is the...", "tell me about" → User wants specific details
+   - FILTER: "assigned to", "with tag", "overdue", "high priority" → User wants filtered results
+   - SEARCH: mentions a name, status, or keyword → User is searching for something specific
 
-    EXAMPLE QUERIES (List Scope):
-    Q: "What tasks are due this week?"
-    A: SELECT name, url, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status FROM "tasks_CAG_custom" WHERE list_id = $1 AND due_date >= NOW() AND due_date < NOW() + INTERVAL '7 days' ORDER BY due_date LIMIT 100
+2. ENTITY FOCUS - What is the user asking about?
+   - TASKS: task names, status, priority, due dates, assignees (use "tasks_CAG_custom")
+   - COMMENTS: comments, discussions, resolved comments (use "comments_CAG_custom" with JOIN)
+   - LISTS: list info, space, folder (use "lists_CAG_custom")
 
-    EXAMPLE QUERIES (Folder Scope):
-    Q: "What tasks are due this week?"
-    A: SELECT name, url, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status FROM "tasks_CAG_custom" WHERE list_id IN (SELECT id FROM "lists_CAG_custom" WHERE folder_id = $1) AND due_date >= NOW() AND due_date < NOW() + INTERVAL '7 days' ORDER BY due_date LIMIT 100
+3. FILTER KEYWORDS - Extract filtering criteria:
+   - Person names: "ian", "john", "mary" → Filter by assignees/watchers
+   - Status words: "complete", "done", "in progress", "open", "todo" → Filter by status
+   - Priority words: "urgent", "high", "normal", "low" → Filter by priority
+   - Time words: "overdue", "due today", "this week", "last 7 days" → Filter by dates
+   - Tag names: Any word that could be a tag → Filter by tags
 
-    Your response should be ONLY the SQL query, nothing else. Do not include explanations, markdown formatting, or any other text.`;
+4. EXPECTED RESPONSE COLUMNS - What does the user expect to see?
+   - Always include: name, url (for clickable links)
+   - For assignee questions: include assignees column
+   - For due date questions: include due_date (formatted)
+   - For status questions: include status
+   - For priority questions: include priority
+   - For time/update questions: include updated_at, created_at
+
+=== STEP 2: COLUMN SELECTION GUIDE ===
+
+Based on the query type, select ONLY relevant columns to give focused answers:
+
+| User Asks About | Required Columns |
+|-----------------|------------------|
+| Tasks in general | name, url, status |
+| Assignees/who | name, url, assignees |
+| Due dates/deadlines | name, url, due_date (formatted), status |
+| Overdue tasks | name, url, due_date (formatted), status, assignees |
+| Status/progress | name, url, status, status_type |
+| Priority | name, url, priority, status |
+| Recently updated | name, url, updated_at (formatted), status |
+| Created tasks | name, url, created_at (formatted), creator |
+| Tags | name, url, tags |
+| Comments | comment_text, task name (via JOIN), user, date |
+| Time tracking | name, url, time_spent, time_estimate |
+| Counts | COUNT(*) with appropriate alias |
+
+=== STEP 3: SMART KEYWORD INTERPRETATION ===
+
+Understand what users MEAN, not just what they SAY:
+
+| User Says | They Mean | SQL Filter |
+|-----------|-----------|------------|
+| "task assign to ian" | Tasks where ian is an assignee | EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%ian%' OR a->>'email' ILIKE '%ian%') |
+| "ian's tasks" | Tasks assigned to ian | Same as above |
+| "who is working on X" | Assignees of task X | SELECT assignees WHERE name ILIKE '%X%' |
+| "overdue tasks" | Tasks past due date | due_date < NOW() AND status_type != 'closed' |
+| "incomplete tasks" | Tasks not done | status_type != 'closed' |
+| "done tasks" | Completed tasks | status_type = 'closed' OR status ILIKE '%complete%' OR status ILIKE '%done%' |
+| "urgent" | High priority tasks | priority ILIKE '%urgent%' OR priority ILIKE '%high%' |
+| "recent" / "latest" | Recently updated | ORDER BY updated_at DESC |
+| "old" / "oldest" | Oldest tasks | ORDER BY created_at ASC |
+
+=== MANDATORY GUARDRAILS ===
+
+1. SCOPING (REQUIRED): 
+   - List scope: WHERE list_id = $1
+   - Folder scope: WHERE list_id IN (SELECT id FROM "lists_CAG_custom" WHERE folder_id = $1)
+
+2. LIMIT (REQUIRED): Always include LIMIT (default 100, max 1000)
+
+3. SELECT ONLY: No INSERT, UPDATE, DELETE, DROP, ALTER, GRANT
+
+4. TABLES: Only use "lists_CAG_custom", "tasks_CAG_custom", "comments_CAG_custom"
+
+5. CASE-SENSITIVE TABLE NAMES: Always use double quotes: "tasks_CAG_custom"
+
+6. DATE FORMATTING: TO_CHAR(date_field, 'Month DD, YYYY, HH12:MI AM TZ')
+
+7. JSONB SEARCH (CRITICAL):
+   - For assignees: EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%name%' OR a->>'email' ILIKE '%name%')
+   - For tags: EXISTS (SELECT 1 FROM jsonb_array_elements(tags) AS t WHERE t->>'name' ILIKE '%tagname%')
+   - NEVER use @> for name matching (it requires exact match)
+
+8. NAME/TEXT MATCHING: Always use ILIKE '%term%' for flexible matching
+
+9. FOLLOW-UP QUESTIONS: Reuse WHERE conditions from previous query in chat history
+
+=== EXAMPLES WITH INTENT ANALYSIS ===
+
+Q: "task assign to ian"
+→ Intent: FILTER tasks by assignee "ian"
+→ Table: tasks_CAG_custom
+→ Columns: name, url, assignees, status
+→ Filter: EXISTS on assignees JSONB with ILIKE
+SQL: SELECT name, url, assignees, status FROM "tasks_CAG_custom" WHERE list_id = $1 AND EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%ian%' OR a->>'email' ILIKE '%ian%') LIMIT 100
+
+Q: "how many tasks are overdue"
+→ Intent: COUNT with time filter
+→ Table: tasks_CAG_custom  
+→ Columns: COUNT(*)
+→ Filter: due_date < NOW() AND status_type != 'closed'
+SQL: SELECT COUNT(*) as overdue_count FROM "tasks_CAG_custom" WHERE list_id = $1 AND due_date < NOW() AND status_type != 'closed' LIMIT 100
+
+Q: "what is the status of website redesign"
+→ Intent: DETAILS about specific task
+→ Table: tasks_CAG_custom
+→ Columns: name, url, status, priority, assignees, due_date
+→ Filter: name ILIKE '%website redesign%'
+SQL: SELECT name, url, status, priority, assignees, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date FROM "tasks_CAG_custom" WHERE list_id = $1 AND name ILIKE '%website redesign%' LIMIT 100
+
+Q: "show me high priority tasks due this week"
+→ Intent: LIST with multiple filters
+→ Table: tasks_CAG_custom
+→ Columns: name, url, priority, due_date, status, assignees
+→ Filter: priority filter + date range
+SQL: SELECT name, url, priority, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status, assignees FROM "tasks_CAG_custom" WHERE list_id = $1 AND (priority ILIKE '%high%' OR priority ILIKE '%urgent%') AND due_date >= NOW() AND due_date < NOW() + INTERVAL '7 days' ORDER BY due_date LIMIT 100
+
+Q: "who is assigned to the marketing campaign task"
+→ Intent: DETAILS - get assignees of specific task
+→ Table: tasks_CAG_custom
+→ Columns: name, url, assignees
+→ Filter: name ILIKE '%marketing campaign%'
+SQL: SELECT name, url, assignees FROM "tasks_CAG_custom" WHERE list_id = $1 AND name ILIKE '%marketing campaign%' LIMIT 100
+
+Your response should be ONLY the SQL query, nothing else. Do not include your analysis, explanations, markdown formatting, or any other text.`;
 
 export async function generateSQL(
     question: string,
@@ -212,23 +292,23 @@ export async function generateSQL(
 CONTEXT:
 - Scope: ${scope.toUpperCase()}
 - Valid Status Values: [${statuses}]
-- Sample Task Names: [${uniqueTaskNames}]
-- Current Time: ${new Date().toISOString()}
+    - Sample Task Names: [${uniqueTaskNames}]
+        - Current Time: ${new Date().toISOString()}
 
 INSTRUCTIONS FOR ENTITY RESOLUTION:
-- If the user mentions a status that is slightly different (e.g., "todo" vs "To Do"), map it to the closest valid status from the context.
-- Use ILIKE for flexible matching (e.g., status ILIKE '%To Do%').
+- If the user mentions a status that is slightly different(e.g., "todo" vs "To Do"), map it to the closest valid status from the context.
+- Use ILIKE for flexible matching(e.g., status ILIKE '%To Do%').
 - For priority, common values are: urgent, high, normal, low
-- For task names: ALWAYS use ILIKE for case-insensitive matching (e.g., name ILIKE '%QA Testing%' will match "QA Testing", "qa testing", "Qa Testing", etc.)
-- When user asks about a specific task by name, match it using ILIKE with wildcards: name ILIKE '%task_name%'
-- Handle partial matches: "QA" should match "QA Testing", "QA Review", etc.
+    - For task names: ALWAYS use ILIKE for case -insensitive matching(e.g., name ILIKE '%QA Testing%' will match "QA Testing", "qa testing", "Qa Testing", etc.)
+        - When user asks about a specific task by name, match it using ILIKE with wildcards: name ILIKE '%task_name%'
+            - Handle partial matches: "QA" should match "QA Testing", "QA Review", etc.
 `;
 
         // Format history for OpenAI
         const recentHistory = history.slice(-6).map(msg => ({
             role: msg.role,
             content: msg.role === 'assistant' && msg.sql
-                ? `${msg.content}\n\n[System Note: The above response was generated using this SQL: ${msg.sql}]`
+                ? `${msg.content} \n\n[System Note: The above response was generated using this SQL: ${msg.sql}]`
                 : msg.content
         }));
 
@@ -255,8 +335,8 @@ INSTRUCTIONS FOR ENTITY RESOLUTION:
         let sql = response.choices[0]?.message?.content?.trim() || '';
 
         // Clean up SQL
-        sql = sql.replace(/^```[\w]*\n?/i, '').replace(/\n?```$/i, '').trim();
-        const sqlMatch = sql.match(/```sql\s*([\s\S]*?)```/i) || sql.match(/```\s*([\s\S]*?)```/i);
+        sql = sql.replace(/^```[\w]*\n ? /i, '').replace(/\n ? ```$/i, '').trim();
+        const sqlMatch = sql.match(/```sql\s * ([\s\S] *?)```/i) || sql.match(/```\s * ([\s\S] *?)```/i);
         if (sqlMatch) {
             sql = sqlMatch[1].trim();
         }
