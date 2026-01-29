@@ -132,8 +132,8 @@ export async function syncList(listUrl: string) {
             // Dates
             due_date: task.due_date ? new Date(parseInt(task.due_date)).toISOString() : null,
             start_date: task.start_date ? new Date(parseInt(task.start_date)).toISOString() : null,
-            date_closed: task.date_closed ? new Date(task.date_closed).toISOString() : null,
-            date_done: task.date_done ? new Date(task.date_done).toISOString() : null,
+            date_closed: task.date_closed ? new Date(parseInt(task.date_closed)).toISOString() : null,
+            date_done: task.date_done ? new Date(parseInt(task.date_done)).toISOString() : null,
             date_created: task.date_created ? new Date(parseInt(task.date_created)).toISOString() : null,
             date_updated: task.date_updated ? new Date(parseInt(task.date_updated)).toISOString() : null,
 
@@ -185,6 +185,31 @@ export async function syncList(listUrl: string) {
             url: task.url,
         }));
 
+        // DELETION DETECTION: Remove tasks that exist in DB but not in ClickUp
+        const clickupTaskIds = new Set(tasksData.tasks.map(t => t.id));
+
+        const { data: existingTasks } = await supabaseAdmin
+            .from('tasks_CAG_custom')
+            .select('clickup_task_id')
+            .eq('list_id', list.id);
+
+        const tasksToDelete = existingTasks
+            ?.filter((t: { clickup_task_id: string }) => !clickupTaskIds.has(t.clickup_task_id))
+            .map((t: { clickup_task_id: string }) => t.clickup_task_id) || [];
+
+        if (tasksToDelete.length > 0) {
+            const { error: deleteError } = await supabaseAdmin
+                .from('tasks_CAG_custom')
+                .delete()
+                .in('clickup_task_id', tasksToDelete);
+
+            if (deleteError) {
+                console.error(`Failed to delete stale tasks: ${deleteError.message}`);
+            } else {
+                console.log(`✅ Deleted ${tasksToDelete.length} stale tasks from list ${list.name}`);
+            }
+        }
+
         // Batch upsert tasks (Supabase has a limit, so chunk if needed)
         const BATCH_SIZE = 100;
         for (let i = 0; i < tasksToUpsert.length; i += BATCH_SIZE) {
@@ -203,27 +228,30 @@ export async function syncList(listUrl: string) {
         console.log(`Synced ${tasksToUpsert.length} tasks`);
 
         // 3. Fetch and upsert comments for all tasks
-        // SKIP for now to avoid rate limits and timeouts during initial sync
-        console.log('Skipping comment sync for performance...');
-        /*
         console.log('Fetching comments...');
-        let totalComments = 0;
+        let totalCommentsScanned = 0;
+
+        // Pre-fetch all internal task IDs for this list to avoid per-task SQL queries
+        const { data: listTasks, error: listTasksError } = await supabaseAdmin
+            .from('tasks_CAG_custom')
+            .select('id, clickup_task_id')
+            .eq('list_id', list.id);
+
+        if (listTasksError) {
+            console.error('Error pre-fetching task IDs for comment sync:', listTasksError);
+        }
+
+        const taskIdMap = new Map((listTasks as { id: string, clickup_task_id: string }[] | null)?.map(t => [t.clickup_task_id, t.id]) || []);
 
         for (const task of tasksData.tasks) {
             try {
-                const commentsData = await clickupClient.getComments(task.id);
-                
-                // Get internal task ID
-                const { data: internalTask } = await supabaseAdmin
-                    .from('tasks_CAG_custom')
-                    .select('id')
-                    .eq('clickup_task_id', task.id)
-                    .single();
+                const internalTaskId = taskIdMap.get(task.id);
+                if (!internalTaskId) continue;
 
-                if (!internalTask) continue;
+                const commentsData = await clickupClient.getComments(task.id);
 
                 const commentsToUpsert = commentsData.comments.map((comment) => ({
-                    task_id: internalTask.id,
+                    task_id: internalTaskId,
                     clickup_id: comment.id,
                     text: comment.comment_text || (comment.comment && comment.comment[0]?.text) || null,
                     comment_text: comment.comment_text || null,
@@ -243,7 +271,7 @@ export async function syncList(listUrl: string) {
                     if (commentsError) {
                         console.error(`Failed to upsert comments for task ${task.id}:`, commentsError);
                     } else {
-                        totalComments += commentsToUpsert.length;
+                        totalCommentsScanned += commentsToUpsert.length;
                     }
                 }
             } catch (error) {
@@ -252,16 +280,15 @@ export async function syncList(listUrl: string) {
             }
         }
 
+        const totalComments = totalCommentsScanned;
         if (totalComments > 0) {
             console.log(`Synced ${totalComments} comments`);
         } else {
-            console.log('No comments to sync');
+            console.log('No comments found to sync');
         }
-        */
-        const totalComments = 0;
 
         // 4. Register webhook if not already registered
-        await registerWebhook(list.id, listData.id);
+        await registerWebhook(workspace.id, list.id, listData.id);
 
         console.log(`Sync completed for list: ${list.name}`);
 
@@ -321,7 +348,7 @@ export async function syncFolder(folderUrl: string) {
 /**
  * Register a webhook for a list if not already registered
  */
-async function registerWebhook(internalListId: string, clickupListId: string) {
+async function registerWebhook(teamId: string, internalListId: string, clickupListId: string) {
     if (!WEBHOOK_CALLBACK_URL) {
         console.warn('CLICKUP_WEBHOOK_CALLBACK_URL not set, skipping webhook registration');
         return;
@@ -344,6 +371,7 @@ async function registerWebhook(internalListId: string, clickupListId: string) {
         // Create webhook in ClickUp
         console.log(`Creating webhook for list ${clickupListId} with callback ${WEBHOOK_CALLBACK_URL}`);
         const webhook = await clickupClient.createWebhook(
+            teamId,
             clickupListId,
             WEBHOOK_CALLBACK_URL
         );

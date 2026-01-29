@@ -1,29 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase/client';
+import { supabaseAdmin, ensureSupabaseConfigured } from '@/lib/supabase/client';
 
 export async function GET(request: NextRequest) {
     try {
+        ensureSupabaseConfigured();
         const { data: lists, error } = await supabaseAdmin
             .from('lists_CAG_custom')
             .select('id, name, url, description, last_synced, created_at, folder_id, folder_name')
             .order('created_at', { ascending: false });
 
         if (error) {
+            console.error('Supabase fetch error details:', {
+                message: error.message,
+                details: error.details,
+                hint: error.hint,
+                code: error.code
+            });
             throw new Error(`Failed to fetch lists: ${error.message}`);
         }
 
         // Get task counts for each list
         const listsWithStats = await Promise.all(
-            (lists || []).map(async (list) => {
-                const { count } = await supabaseAdmin
-                    .from('tasks_CAG_custom')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('list_id', list.id);
+            (lists || []).map(async (list: any) => {
+                try {
+                    const { count } = await supabaseAdmin
+                        .from('tasks_CAG_custom')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('list_id', list.id);
 
-                return {
-                    ...list,
-                    cardCount: count || 0,
-                };
+                    return {
+                        ...list,
+                        cardCount: count || 0,
+                    };
+                } catch (err: any) {
+                    console.error(`Error fetching stats for list ${list.id}:`, err);
+                    return {
+                        ...list,
+                        cardCount: 0,
+                    };
+                }
             })
         );
 

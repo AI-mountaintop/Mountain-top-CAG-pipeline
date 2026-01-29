@@ -6,6 +6,34 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || 'sk-placeholder',
 });
 
+export interface IntentResult {
+    intent: string;
+    is_vague: boolean;
+    refers_to_previous: boolean;
+    missing_information: string[];
+    confidence: number;
+}
+
+export interface ChatState {
+    currentTime?: string;
+    [key: string]: any;
+}
+
+/**
+ * Check if the input is likely an explicit SQL query
+ */
+export function isExplicitSQLQuery(text: string): boolean {
+    const trimmed = text.trim().toUpperCase();
+    return (
+        trimmed.startsWith('SELECT ') ||
+        trimmed.startsWith('INSERT ') ||
+        trimmed.startsWith('UPDATE ') ||
+        trimmed.startsWith('DELETE ') ||
+        trimmed.startsWith('CREATE ') ||
+        trimmed.startsWith('DROP ')
+    );
+}
+
 /**
  * Retry OpenAI API call with exponential backoff on rate limit errors
  */
@@ -34,7 +62,6 @@ async function retryOpenAICall<T>(
                     retryAfter = baseDelay * Math.pow(2, attempt);
                 }
 
-                console.log(`Rate limit hit, retrying in ${retryAfter}ms (attempt ${attempt + 1}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, retryAfter));
                 continue;
             }
@@ -95,6 +122,7 @@ Table: "tasks_CAG_custom"
 - time_spent (INTEGER) - milliseconds
 - points (INTEGER) - story points
 - url (TEXT)
+- parent_task_id (TEXT, nullable) - ClickUp parent task ID for subtasks
 - created_at (TIMESTAMPTZ)
 - updated_at (TIMESTAMPTZ) - INDEXED for time-based queries
 
@@ -125,7 +153,17 @@ Table: "task_due_date_history"
 IMPORTANT: The updated_at field is automatically updated on any task modification and is indexed for efficient time-based queries.
 `;
 
-const SYSTEM_PROMPT = `You are an intelligent SQL query generator for a ClickUp project management database. Your job is to ANALYZE user intent first, then generate accurate PostgreSQL queries.
+const SYSTEM_PROMPT = `You are a senior Context Augmented Generation (CAG) engineer for a ClickUp Intelligence database. Your mission is to generate high-performance SQL queries that adhere to the 8 CAG CORE PRINCIPLES.
+
+=== CAG CORE PRINCIPLES ===
+1. INSTRUCTION FOLLOWING: Strictly follow SQL guardrails and data privacy rules.
+2. FACTUAL ACCURACY: Use ONLY the provided schema. Never invent columns or tables.
+3. RELEVANCE: Generate queries that precisely target the user's intent. Filter aggressively.
+4. COMPLETENESS: Include all necessary fields for a rich response (name, url, recent activity, assignees).
+5. WRITING STYLE & TONE: Maintain a professional, ClickUp-savvy assistant voice in your logic.
+6. COLLABORATIVELY: Prioritize team data like assignees and comment activity for better insights.
+7. CONTEXT AWARENESS: Deeply leverage conversation history to resolve pronouns and incremental filters.
+8. SAFETY: Always enforce list/folder scoping ($1) and never perform mutation operations.
 
 ${DATABASE_SCHEMA}
 
@@ -142,7 +180,7 @@ Before writing any SQL, you MUST mentally analyze the user's question:
 
 2. ENTITY FOCUS - What is the user asking about?
    - TASKS: task names, status, priority, due dates, assignees (use "tasks_CAG_custom")
-   - COMMENTS: comments, discussions, resolved comments (use "comments_CAG_custom" with JOIN)
+   - COMMENTS/ACTIVITY: comments, discussions, user activity, recent changes (use "comments_CAG_custom" with JOIN or "task_due_date_history")
    - LISTS: list info, space, folder (use "lists_CAG_custom")
 
 3. FILTER KEYWORDS - Extract filtering criteria:
@@ -154,8 +192,8 @@ Before writing any SQL, you MUST mentally analyze the user's question:
 
 4. EXPECTED RESPONSE COLUMNS - What does the user expect to see?
    - Always include: name, url (for clickable links)
-   - For assignee questions: include assignees column
-   - For due date questions: include due_date (formatted)
+   - For assignee questions: include assignees AND due_date columns
+   - ALWAYS include due_date (formatted) whenever possible for completeness
    - For status questions: include status
    - For priority questions: include priority
    - For time/update questions: include updated_at, created_at
@@ -166,18 +204,21 @@ Based on the query type, select ONLY relevant columns to give focused answers:
 
 | User Asks About | Required Columns |
 |-----------------|------------------|
-| Tasks in general | name, url, status |
-| Assignees/who | name, url, assignees |
+| Tasks in general | name, url, status, due_date (formatted) |
+| Assignees/who | name, url, assignees, due_date (formatted), status |
 | Due dates/deadlines | name, url, due_date (formatted), status |
 | Overdue tasks | name, url, due_date (formatted), status, assignees |
 | Status/progress | name, url, status, status_type |
 | Priority | name, url, priority, status |
-| Recently updated | name, url, updated_at (formatted), status |
-| Created tasks | name, url, created_at (formatted), creator |
+| Recently updated | name, url, TO_CHAR(updated_at, 'Month DD, YYYY, HH12:MI AM TZ') as updated_at, status |
+| Completed/Done | name, url, TO_CHAR(date_closed, 'Month DD, YYYY, HH12:MI AM TZ') as date_closed, status |
+| Created tasks | name, url, TO_CHAR(created_at, 'Month DD, YYYY, HH12:MI AM TZ') as created_at, creator |
 | Tags | name, url, tags |
-| Comments | comment_text, task name (via JOIN), user, date |
+| Comments/Activity | t.name, t.url, c.comment_text, c."user", TO_CHAR(c."date", 'Month DD, YYYY, HH12:MI AM TZ') as comment_date (requires LEFT JOIN "comments_CAG_custom" c ON t.id = c.task_id) |
+| Task History | t.name, t.url, TO_CHAR(h.old_due_date, 'Month DD, YYYY, HH12:MI AM TZ') as old_date, TO_CHAR(h.new_due_date, 'Month DD, YYYY, HH12:MI AM TZ') as new_date (requires JOIN "task_due_date_history" h ON t.id = h.task_id) |
 | Time tracking | name, url, time_spent, time_estimate |
 | Counts | COUNT(*) with appropriate alias |
+| Complete Summary | t.name, t.url, t.description, t.status, t.assignees, t.priority, (SELECT json_agg(s.name) FROM "tasks_CAG_custom" s WHERE s.parent_task_id = t.clickup_task_id) as subtasks, c.comment_text, c."user", TO_CHAR(c."date", 'Month DD, YYYY, HH12:MI AM TZ') as comment_date (requires LEFT JOIN "comments_CAG_custom" c ON t.id = c.task_id) |
 
 === STEP 3: SMART KEYWORD INTERPRETATION ===
 
@@ -197,9 +238,13 @@ Understand what users MEAN, not just what they SAY:
 | "urgent" | High priority tasks | priority ILIKE '%urgent%' OR priority ILIKE '%high%' |
 | "recent" / "latest" | Recently updated | ORDER BY updated_at DESC |
 | "old" / "oldest" | Oldest tasks | ORDER BY created_at ASC |
-| "deadline changed" | Tasks with due date changes | JOIN task_due_date_history |
-| "date changed X times" | Tasks with multiple deadline changes | JOIN + GROUP BY + HAVING COUNT > X |
-| "rescheduled tasks" | Tasks with due date changes | JOIN task_due_date_history |
+| "deadline changed" | Tasks with due date changes | JOIN "task_due_date_history" h ON t.id = h.task_id |
+| "date changed X times" | Tasks with multiple changes | JOIN "task_due_date_history" h ON t.id = h.task_id |
+| "rescheduled tasks" | Tasks with due date changes | JOIN "task_due_date_history" h ON t.id = h.task_id |
+| "activity" / "recent activity" | Latest comments or updates | LEFT JOIN "comments_CAG_custom" c ON t.id = c.task_id |
+| "what happened" | Latest comments and updates | LEFT JOIN "comments_CAG_custom" c ON t.id = c.task_id |
+| "who commented" | Users who left comments | JOIN "comments_CAG_custom" c ON t.id = c.task_id |
+| "completed today/this week" | Completed tasks in timeframe | status_type = 'closed' AND date_closed >= [TIMEFRAME_START] |
 
 CRITICAL: OVERDUE/MISSED DEADLINE LOGIC
 - When user asks about "overdue", "missed deadline", "late", or "past due" tasks:
@@ -216,15 +261,118 @@ CRITICAL: DUE DATE CHANGE HISTORY QUERIES
   - Use GROUP BY t.id to aggregate per task
   - Use HAVING COUNT(h.id) > X to filter by number of changes
 
+CRITICAL: COMPLETION LOGIC (FACTUAL ACCURACY)
+- When user asks for "completed", "done", or "closed" tasks within a time range (e.g., "today", "this week"):
+  - ALWAYS use the "date_closed" column for filtering, NOT "updated_at".
+  - ALWAYS include "date_closed" in the SELECT list so the user can see when it was finished.
+  - A task is completed in a timeframe ONLY IF its "date_closed" is within that range.
+  - Example "completed this week": SELECT name, url, TO_CHAR(date_closed, '...') as date_closed FROM ... WHERE status_type = 'closed' AND date_closed >= DATE_TRUNC('week', NOW())
+
+===STEP 4: CONTEXT CONTINUITY (CRITICAL FOR FOLLOW-UPS) ===
+
+**UNDERSTANDING CONVERSATION CONTEXT:**
+
+When a user asks a follow-up question, you MUST maintain context from previous queries. There are THREE types of follow-ups:
+
+**TYPE 1: CLARIFICATION ANSWERS**
+User provides a value that was requested in a clarification question.
+
+Pattern Recognition:
+- Previous assistant message was a QUESTION (e.g., "What timeframe would you like?")
+- Current user message is a SHORT ANSWER (e.g., "7 days", "last week", "Ian")
+- NO SQL in previous assistant message
+
+Action:
+1. Look back 2-3 messages to find the ORIGINAL user request (before the clarification)
+2. Take the ORIGINAL intent (e.g., "show me recent tasks")
+3. Apply the NEW filter from the answer (e.g., "7 days")
+4. Generate SQL that fulfills: ORIGINAL_REQUEST + NEW_FILTER
+
+Example:
+
+User: "show me recent tasks"
+Assistant: "I'd be happy to show you recent tasks! What timeframe would you like - last 24 hours, last 7 days, or last 30 days?"
+User: "7 days"
+Generated SQL: SELECT name, url, status, TO_CHAR(updated_at, 'Month DD, YYYY, HH12:MI AM TZ') as updated_at 
+       FROM "tasks_CAG_custom" 
+       WHERE list_id = $1 AND updated_at > NOW() - INTERVAL '7 days'
+       ORDER BY updated_at DESC LIMIT 100
+
+**TYPE 2: INCREMENTAL REFINEMENT**
+User adds filters to narrow down previous results using pronouns or filter phrases.
+
+Pattern Recognition:
+- Previous assistant message HAS SQL
+- Current user message contains: "them", "those", "these", "only", "just", "filter by", "narrow down"
+- User is REFINING, not starting fresh
+
+Action:
+1. Extract ALL WHERE clauses from the previous SQL
+2. Keep the base filters (list_id, folder_id, etc.)
+3. ADD the new filter as an additional AND condition
+4. Preserve ORDER BY and LIMIT from previous query
+
+Example:
+
+Previous SQL: WHERE list_id = $1 AND status_type != 'closed'
+User: "only those assigned to Ian"
+Generated SQL: WHERE list_id = $1 AND status_type != 'closed'
+       AND EXISTS(SELECT 1 FROM jsonb_array_elements(assignees) AS a
+                   WHERE a ->> 'username' ILIKE '%ian%' OR a ->> 'email' ILIKE '%ian%')
+
+**TYPE 3: PRONOUN REFERENCE**
+User refers to previous results with pronouns but asks a NEW question about them.
+
+Pattern Recognition:
+- User says: "what about them?", "who's assigned to those?", "when are these due?"
+- Previous SQL exists
+- User wants DIFFERENT information about the SAME set of results
+
+Action:
+1. Keep the WHERE clause from previous SQL (this defines "them"/"those"/"these")
+2. Change the SELECT columns based on the new question
+3. Adjust ORDER BY if needed for the new question
+
+Example:
+
+Previous SQL: SELECT name, url, status FROM "tasks_CAG_custom" WHERE list_id = $1 AND status = 'In Progress'
+User: "when are those due?"
+Generated SQL: SELECT name, url, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status
+       FROM "tasks_CAG_custom" 
+       WHERE list_id = $1 AND status = 'In Progress'
+       ORDER BY due_date ASC LIMIT 100
+
+
+**CONTEXT RESET SIGNALS:**
+Drop previous context if user says:
+- "now show me..." (explicit topic change)
+- "what about [NEW_TOPIC]" (different entity)
+- "forget that, ..." (explicit reset)
+- Asks about a completely different entity (e.g., was asking about tasks, now asks about comments)
+
+**CRITICAL RULES:**
+1. ALWAYS check conversation history for context
+2. For clarification answers, combine ORIGINAL_REQUEST + NEW_FILTER
+3. For refinements, ADD filters with AND, don't replace
+4. For pronoun references, keep WHERE clause, change SELECT
+5. Preserve scoping (list_id or folder_id) across all follow-ups
+6. When in doubt, err on the side of maintaining context
+
 === MANDATORY GUARDRAILS ===
 
 1. SCOPING (REQUIRED): 
    - List scope: WHERE list_id = $1
    - Folder scope: WHERE list_id IN (SELECT id FROM "lists_CAG_custom" WHERE folder_id = $1)
+   - CRITICAL: tasks_CAG_custom does NOT have a folder_id column! NEVER use WHERE folder_id = $1 on tasks.
 
-2. LIMIT (REQUIRED): Always include LIMIT (default 100, max 1000)
+2. SUBTASK FILTERING (CRITICAL):
+   - By default, EXCLUDE subtasks from task queries: AND parent_task_id IS NULL
+   - Only include subtasks if the user explicitly asks for "subtasks", "child tasks", or "tasks and subtasks"
+   - This prevents double-counting (e.g., "Ian's tasks" should return 14 parent tasks, not 111 tasks+subtasks)
 
-3. SELECT ONLY: No INSERT, UPDATE, DELETE, DROP, ALTER, GRANT
+3. LIMIT (REQUIRED): Always include LIMIT (default 100, max 1000)
+
+4. SELECT ONLY: No INSERT, UPDATE, DELETE, DROP, ALTER, GRANT
 
 4. TABLES: Only use "lists_CAG_custom", "tasks_CAG_custom", "comments_CAG_custom", "task_due_date_history"
 
@@ -237,18 +385,21 @@ CRITICAL: DUE DATE CHANGE HISTORY QUERIES
    - For tags: EXISTS (SELECT 1 FROM jsonb_array_elements(tags) AS t WHERE t->>'name' ILIKE '%tagname%')
    - NEVER use @> for name matching (it requires exact match)
 
-8. NAME/TEXT MATCHING: Always use ILIKE '%term%' for flexible matching
+8. NO SEMICOLONS (CRITICAL): NEVER include a semicolon (;) at the end of your SQL query. The query will be wrapped in a subquery for safety.
 
-9. FOLLOW-UP QUESTIONS: Reuse WHERE conditions from previous query in chat history
+10. NAME/TEXT MATCHING: Always use ILIKE '%term%' for flexible matching
+11. SUBQUERIES: Always ensure subqueries are complete (e.g., SELECT ... FROM ...) and correctly bracketed.
+12. FOLLOW-UP QUESTIONS: Reuse WHERE conditions from previous query in chat history
+13. COMPLETION DATES (CRITICAL): Always use "date_closed" for "completed/done" time-filters. NEVER use "updated_at" for this purpose.
 
 === EXAMPLES WITH INTENT ANALYSIS ===
 
 Q: "task assign to ian"
 → Intent: FILTER tasks by assignee "ian"
 → Table: tasks_CAG_custom
-→ Columns: name, url, assignees, status
-→ Filter: EXISTS on assignees JSONB with ILIKE
-SQL: SELECT name, url, assignees, status FROM "tasks_CAG_custom" WHERE list_id = $1 AND EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%ian%' OR a->>'email' ILIKE '%ian%') LIMIT 100
+→ Columns: name, url, assignees, due_date, status
+→ Filter: EXISTS on assignees JSONB with ILIKE + exclude subtasks
+SQL: SELECT name, url, assignees, TO_CHAR(due_date, 'Month DD, YYYY, HH12:MI AM TZ') as due_date, status FROM "tasks_CAG_custom" WHERE list_id = $1 AND parent_task_id IS NULL AND EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%ian%' OR a->>'email' ILIKE '%ian%') LIMIT 100
 
 Q: "how many tasks are overdue"
 → Intent: COUNT with time filter
@@ -316,11 +467,40 @@ Your response should be ONLY the SQL query, nothing else. Do not include your an
 
 export async function generateSQL(
     question: string,
-    entityId: string, // listId or folderId
-    history: Array<{ role: 'user' | 'assistant'; content: string; sql?: string }> = [],
-    scope: 'list' | 'folder' = 'list'
-): Promise<{ sql: string; explanation: string }> {
+    boardId: string,
+    history: Array<{ role: 'user' | 'assistant'; content: string; sql?: string; intent?: string }> = [],
+    scope: 'list' | 'folder' = 'list',
+    intentResult?: IntentResult,
+    state?: ChatState & { followUpSql?: string; previousClarification?: string }
+): Promise<{ sql: string; explanation: string; intent?: string }> {
     try {
+        // Check if user provided an explicit SQL query
+        if (isExplicitSQLQuery(question)) {
+            // Validate the explicit SQL query
+            validateSQL(question, boardId, scope);
+
+            // Get explanation for the explicit query
+            const explanationResponse = await retryOpenAICall(async () => {
+                return await openai.chat.completions.create({
+                    model: 'gpt-4o-mini',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'Explain the following SQL query in simple, human-readable terms.',
+                        },
+                        { role: 'user', content: question },
+                    ],
+                    temperature: 0.3,
+                });
+            });
+
+            const explanation =
+                explanationResponse.choices[0]?.message?.content?.trim() ||
+                'Executing the provided SQL query.';
+
+            return { sql: question.trim(), explanation, intent: 'EXPLICIT_SQL' };
+        }
+
         // 1. Fetch context (status values from tasks)
         // Adjust query based on scope
         let query = supabaseAdmin
@@ -328,68 +508,136 @@ export async function generateSQL(
             .select('status, name');
 
         if (scope === 'list') {
-            query = query.eq('list_id', entityId);
+            query = query.eq('list_id', boardId);
         } else {
-            // For folder, we need to find lists in the folder first
-            // But Supabase JS client doesn't support subqueries in .eq() easily
-            // So we'll fetch list IDs first
             const { data: lists } = await supabaseAdmin
                 .from('lists_CAG_custom')
                 .select('id')
-                .eq('folder_id', entityId);
+                .eq('folder_id', boardId);
 
-            const listIds = lists?.map(l => l.id) || [];
+            const listIds = lists?.map((l: any) => l.id) || [];
             if (listIds.length > 0) {
                 query = query.in('list_id', listIds);
             } else {
-                // No lists in folder, return empty context
                 query = query.eq('list_id', '00000000-0000-0000-0000-000000000000');
             }
         }
 
         const { data: tasks } = await query.limit(1000);
 
-        const statuses = [...new Set(tasks?.map((t) => t.status).filter(Boolean) || [])].join(', ') || 'None';
-        const uniqueTaskNames = [...new Set(tasks?.map((t) => t.name).filter(Boolean) || [])].slice(0, 50).join(', ') || 'None';
+        const statuses = [...new Set(tasks?.map((t: any) => t.status).filter(Boolean) || [])].join(', ') || 'None';
+        const uniqueTaskNames = [...new Set(tasks?.map((t: any) => t.name).filter(Boolean) || [])].slice(0, 50).join(', ') || 'None';
 
         const contextPrompt = `
 CONTEXT:
 - Scope: ${scope.toUpperCase()}
+${scope === 'folder'
+                ? '- CRITICAL: You MUST use folder scoping: WHERE list_id IN (SELECT id FROM "lists_CAG_custom" WHERE folder_id = $1)'
+                : '- CRITICAL: You MUST use list scoping: WHERE list_id = $1'
+            }
 - Valid Status Values: [${statuses}]
     - Sample Task Names: [${uniqueTaskNames}]
         - Current Time: ${new Date().toISOString()}
-
-INSTRUCTIONS FOR ENTITY RESOLUTION:
-- If the user mentions a status that is slightly different(e.g., "todo" vs "To Do"), map it to the closest valid status from the context.
-- Use ILIKE for flexible matching(e.g., status ILIKE '%To Do%').
-- For priority, common values are: urgent, high, normal, low
-    - For task names: ALWAYS use ILIKE for case -insensitive matching(e.g., name ILIKE '%QA Testing%' will match "QA Testing", "qa testing", "Qa Testing", etc.)
-        - When user asks about a specific task by name, match it using ILIKE with wildcards: name ILIKE '%task_name%'
-            - Handle partial matches: "QA" should match "QA Testing", "QA Review", etc.
 `;
 
         // Format history for OpenAI
-        const recentHistory = history.slice(-6).map(msg => ({
-            role: msg.role,
-            content: msg.role === 'assistant' && msg.sql
-                ? `${msg.content} \n\n[System Note: The above response was generated using this SQL: ${msg.sql}]`
-                : msg.content
-        }));
+        const recentHistory = history.slice(-3).map((msg: any) => {
+            if (msg.role === 'assistant' && msg.sql) {
+                return {
+                    role: msg.role,
+                    content: `Response: ${msg.content}\n\nSQL Query Used: ${msg.sql}${msg.intent ? `\nIntent: ${msg.intent}` : ''}`
+                };
+            }
+            return {
+                role: msg.role,
+                content: msg.content
+            };
+        });
+
+        // Add Intent Metadata to the prompt
+        let intentMetadata = '';
+        if (intentResult) {
+            intentMetadata = `
+INTENT METADATA:
+- Classified Intent: ${intentResult.intent}
+- Is Vague: ${intentResult.is_vague}
+- Refers to Previous: ${intentResult.refers_to_previous}
+- Missing Info: ${intentResult.missing_information.join(', ') || 'None'}
+- Confidence: ${intentResult.confidence}
+`;
+        }
+
+        if (state?.previousClarification) {
+            intentMetadata += `\n- Previous Clarification Asked: ${state.previousClarification}`;
+        }
+
+        if (state?.followUpSql) {
+            intentMetadata += `\n- Proposed Follow-up SQL (use as reference): ${state.followUpSql}`;
+        }
+
+        const currentTime = state?.currentTime || new Date().toISOString();
+        intentMetadata += `\n- Current Universal Time: ${currentTime}`;
+        intentMetadata += `\n- DATE FILTER HINT: For "overdue", use updated_at or due_date < '${currentTime}' and status_type != 'closed'. For "recent", just order by updated_at DESC.`;
 
         // Wait for rate limit slots before making API call
         await openaiRateLimiter.waitForSlot('openai-api');
         await openaiSecondRateLimiter.waitForSlot('openai-api-second');
 
-        // Make API call with retry logic for rate limits
         const response = await retryOpenAICall(async () => {
+            const isFollowUp = intentResult?.intent === 'FOLLOW_UP' || intentResult?.refers_to_previous === true;
+            const contextMessage = isFollowUp
+                ? `This is a FOLLOW-UP or ANSWER to clarification: "${question}"
+
+CLARIFICATION ANALYSIS:
+1. Look at history: If the last assistant message was a question, then the current message is the ANSWER.
+2. If it's an answer: Find the user request BEFORE that question.
+3. Combine them: Create a SQL query that fulfills the ORIGINAL request using the NEW filter from the answer.`
+                : `Generate a SQL query for this question: "${question}"`;
+
             return await openai.chat.completions.create({
                 model: 'gpt-4o',
                 messages: [
-                    { role: 'system', content: SYSTEM_PROMPT + contextPrompt },
-                    ...recentHistory,
+                    { role: 'system', content: SYSTEM_PROMPT + contextPrompt + intentMetadata },
+                    ...recentHistory as any,
                     {
                         role: 'user',
-                        content: `Generate a SQL query for this question: "${question}"\n\nRemember: The query MUST include the correct scoping clause for ${scope} scope.`,
+                        content: `${contextMessage}
+
+CRITICAL: INTENT ANALYSIS - Think step by step:
+1. ANALYZE USER INTENT: What is the user really asking?
+   - Are they asking about ACTIVE tasks (overdue, upcoming, in progress, pending)?
+   - Are they asking about RECENT ACTIVITY (recent, latest, what happened lately)?
+   - Are they asking about COMPLETED tasks (done, finished, closed)?
+
+2. For broad task discovery (e.g., "Ian's tasks", "tasks for Website redesign"):
+   - DO NOT automatically filter by status_type or due_date. 
+   - Return ALL matching tasks (open and closed, with and without dates) to ensure Factual Accuracy.
+   - ONLY add "AND status_type != 'closed'" if the user explicitly mentions "active", "pending", "incomplete", or "current".
+
+3. For specific ACTIVE task queries (overdue, upcoming, in progress, pending, current, due soon, ongoing):
+   - SHOULD exclude closed tasks (AND status_type != 'closed').
+   - For "ongoing" specifically: filter by active status types.
+
+3. For RECENT ACTIVITY queries (recent, latest, what happened):
+   - DO NOT filter by status_type. Show all tasks (open and closed) ordered by updated_at DESC.
+   - If no time window is provided, just LIMIT to 10-20 most recent.
+
+4. For COMPLETED task queries:
+   - Add: AND status_type = 'closed'
+
+5. SUBTASK EXCLUSION (MANDATORY):
+   - ALWAYS add: AND parent_task_id IS NULL
+   - This excludes subtasks from results (prevents double-counting)
+   - ONLY skip this filter if user explicitly asks for "subtasks" or "child tasks"
+
+6. Table selection: Use "tasks_CAG_custom" for task queries.
+7. Scoping: MUST include list_id = $1 or folder_id = $1 check.
+8. Fields: ALWAYS include name, url, status, and due_date. 
+   - CRITICAL: If the user asks for a "summary", "details", "full overview", or "activity", you MUST include:
+     - t.description
+     - Subtasks via subquery: (SELECT json_agg(s.name) FROM "tasks_CAG_custom" s WHERE s.parent_task_id = t.clickup_task_id) as subtasks
+     - LEFT JOIN "comments_CAG_custom" c ON t.id = c.task_id and select c.comment_text, c."user", c."date" as comment_date
+`,
                     },
                 ],
                 temperature: 0.1,
@@ -426,10 +674,9 @@ INSTRUCTIONS FOR ENTITY RESOLUTION:
 
         // Validate the generated SQL
         try {
-            validateSQL(sql, entityId, scope);
+            validateSQL(sql, boardId, scope);
         } catch (error) {
             console.error('SQL validation failed. Generated SQL:', sql);
-            console.error('SQL (upper):', sql.toUpperCase());
             throw error;
         }
 
@@ -449,7 +696,7 @@ INSTRUCTIONS FOR ENTITY RESOLUTION:
         const explanation =
             explanationResponse.choices[0]?.message?.content?.trim() || '';
 
-        return { sql, explanation };
+        return { sql, explanation, intent: intentResult?.intent };
     } catch (error) {
         console.error('SQL generation error:', error);
         throw error;
@@ -459,7 +706,7 @@ INSTRUCTIONS FOR ENTITY RESOLUTION:
 /**
  * Validate SQL query against guardrails
  */
-export function validateSQL(sql: string, entityId: string, scope: 'list' | 'folder'): void {
+export function validateSQL(sql: string, boardId: string, scope: 'list' | 'folder'): void {
     const sqlUpper = sql.toUpperCase();
 
     // First, ensure this is a SELECT query
@@ -509,15 +756,15 @@ export function validateSQL(sql: string, entityId: string, scope: 'list' | 'fold
     } else {
         // Folder scope validation
         // Check for: list_id IN (SELECT id FROM lists_CAG_custom WHERE folder_id = $1)
-        // Or variations, but strict check is safer
-        if (!sqlUpper.includes('WHERE FOLDER_ID = $1') && !sqlUpper.includes('WHERE LISTS_CAG_CUSTOM.FOLDER_ID = $1')) {
-            // This is a bit loose, but checking for exact subquery string is fragile due to whitespace
-            // Let's check for the key components
-            if (!sqlUpper.includes('lists_CAG_custom'.toUpperCase()) || !sqlUpper.includes('folder_id'.toUpperCase())) {
-                throw new Error(
-                    'SQL query must include folder scoping: "WHERE list_id IN (SELECT id FROM lists_CAG_custom WHERE folder_id = $1)"'
-                );
-            }
+        // The key pattern is: list_id IN (...) with folder_id = $1 somewhere in the subquery
+        const hasListIdIn = sqlUpper.includes('LIST_ID IN');
+        const hasFolderId = sqlUpper.includes('FOLDER_ID');
+        const hasListsTable = sqlUpper.includes('LISTS_CAG_CUSTOM') || sqlUpper.includes('"LISTS_CAG_CUSTOM"');
+
+        if (!hasListIdIn || !hasFolderId || !hasListsTable) {
+            throw new Error(
+                'SQL query must include folder scoping: "WHERE list_id IN (SELECT id FROM lists_CAG_custom WHERE folder_id = $1)"'
+            );
         }
     }
 
@@ -550,3 +797,4 @@ export function validateSQL(sql: string, entityId: string, scope: 'list' | 'fold
         }
     }
 }
+

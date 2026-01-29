@@ -16,6 +16,7 @@ interface Board {
 export default function BoardsList() {
     const [boards, setBoards] = useState<Board[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         fetchBoards();
@@ -23,13 +24,20 @@ export default function BoardsList() {
 
     const fetchBoards = async () => {
         try {
+            setLoading(true);
+            setError(null);
             const response = await fetch('/api/boards');
-            const data = await response.json();
-            if (response.ok) {
-                setBoards(data.boards || []);
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `Server error: ${response.status}`);
             }
-        } catch (error) {
+
+            const data = await response.json();
+            setBoards(data.boards || []);
+        } catch (error: any) {
             console.error('Error fetching boards:', error);
+            setError(error.message);
         } finally {
             setLoading(false);
         }
@@ -50,6 +58,23 @@ export default function BoardsList() {
             console.error('Error deleting board:', error);
         }
     };
+
+    if (error) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full text-center p-8">
+                <div className="bg-red-50 text-red-600 p-4 rounded-lg mb-4 max-w-md">
+                    <p className="font-semibold">Error Loading Boards</p>
+                    <p className="text-sm">{error}</p>
+                </div>
+                <button
+                    onClick={() => fetchBoards()}
+                    className="px-4 py-2 bg-[#1a1f36] text-white rounded-md hover:bg-[#2a2f46] transition-colors"
+                >
+                    Retry
+                </button>
+            </div>
+        );
+    }
 
     if (loading) {
         return (

@@ -21,7 +21,32 @@ export async function DELETE(
         if (type === 'folder') {
             await deleteFolder(id);
         } else {
-            await deleteList(id);
+            // Smart detection: Check if it's a list ID first (internal UUID or ClickUp ID)
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+            const query = supabaseAdmin.from('lists_CAG_custom').select('id');
+            if (isUuid) query.eq('id', id); else query.eq('clickup_list_id', id);
+
+            const { data: list } = await query.single();
+
+            if (list) {
+                await deleteList(list.id);
+            } else {
+                // If not found in lists, check if it's a folder ID
+                const { data: folderLists } = await supabaseAdmin
+                    .from('lists_CAG_custom')
+                    .select('id')
+                    .eq('folder_id', id)
+                    .limit(1);
+
+                if (folderLists && folderLists.length > 0) {
+                    await deleteFolder(id);
+                } else {
+                    return NextResponse.json(
+                        { error: 'List or Folder not found' },
+                        { status: 404 }
+                    );
+                }
+            }
         }
 
         return NextResponse.json({
@@ -60,11 +85,19 @@ export async function PATCH(
             );
         }
 
-        // Update the list name in Supabase
-        const { data, error } = await supabaseAdmin
+        // Update the list name in Supabase - support both internal UUID and ClickUp ID
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(listId);
+        const query = supabaseAdmin
             .from('lists_CAG_custom')
-            .update({ name: name.trim() })
-            .eq('id', listId)
+            .update({ name: name.trim() });
+
+        if (isUuid) {
+            query.eq('id', listId);
+        } else {
+            query.eq('clickup_list_id', listId);
+        }
+
+        const { data, error } = await query
             .select()
             .single();
 

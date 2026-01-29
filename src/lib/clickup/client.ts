@@ -160,7 +160,7 @@ export class ClickUpClient {
 
         while (hasMore) {
             const response = await this.fetch<{ tasks: ClickUpTask[] }>(
-                `/list/${listId}/task?archived=${archived}&include_markdown_description=true&subtasks=true&page=${page}`
+                `/list/${listId}/task?archived=${archived}&include_markdown_description=true&subtasks=true&include_closed=true&page=${page}`
             );
 
             if (response.tasks && response.tasks.length > 0) {
@@ -200,7 +200,7 @@ export class ClickUpClient {
     /**
      * Create a webhook for a list
      */
-    async createWebhook(listId: string, callbackUrl: string, events: string[] = ['taskCreated', 'taskUpdated', 'taskDeleted', 'taskCommentPosted', 'taskCommentUpdated', 'taskCommentDeleted']) {
+    async createWebhook(teamId: string, listId: string, callbackUrl: string, events: string[] = ['taskCreated', 'taskUpdated', 'taskDeleted', 'taskCommentPosted', 'taskCommentUpdated', 'taskCommentDeleted']) {
         const webhookData: any = {
             webhook: {
                 endpoint: callbackUrl,
@@ -221,7 +221,7 @@ export class ClickUpClient {
             webhookData.webhook.client_id = process.env.CLICKUP_CLIENT_ID;
         }
 
-        return this.fetch<ClickUpWebhook>('/webhook', {
+        return this.fetch<ClickUpWebhook>(`/team/${teamId}/webhook`, {
             method: 'POST',
             body: JSON.stringify(webhookData),
         });
@@ -246,8 +246,8 @@ export class ClickUpClient {
     /**
      * Get all webhooks for a team
      */
-    async getWebhooks(workspaceId: string) {
-        return this.fetch<{ webhooks: ClickUpWebhook[] }>(`/team/${workspaceId}/webhook`);
+    async getWebhooks(teamId: string) {
+        return this.fetch<{ webhooks: ClickUpWebhook[] }>(`/team/${teamId}/webhook`);
     }
 
     /**

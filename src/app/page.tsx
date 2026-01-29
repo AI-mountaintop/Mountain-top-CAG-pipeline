@@ -28,10 +28,11 @@ export default function Home() {
   const fetchBoards = async () => {
     try {
       const response = await fetch('/api/boards');
-      const data = await response.json();
-      if (response.ok) {
-        setBoards(data.boards || []);
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
       }
+      const data = await response.json();
+      setBoards(data.boards || []);
     } catch (error) {
       console.error('Error fetching boards:', error);
     }
@@ -72,14 +73,14 @@ export default function Home() {
   }, [boards]);
 
   return (
-    <div className="flex min-h-screen bg-white">
+    <div className="flex h-screen bg-white overflow-hidden">
       {/* Left Sidebar */}
       <Sidebar activeView={activeView} onViewChange={setActiveView} />
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-auto bg-white">
+      <div className="flex-1 overflow-hidden bg-white min-h-0">
         {activeView === 'add-board' && (
-          <div className="p-6">
+          <div className="p-6 overflow-auto h-full">
             <h2 className="text-3xl font-bold text-[#1a1f36] mb-6">
               Add ClickUp List
             </h2>
@@ -90,10 +91,14 @@ export default function Home() {
           </div>
         )}
 
-        {activeView === 'boards' && <BoardsList />}
+        {activeView === 'boards' && (
+          <div className="p-6 overflow-auto h-full">
+            <BoardsList />
+          </div>
+        )}
 
         {activeView === 'chat' && (
-          <div className="p-6 h-screen flex flex-col">
+          <div className="p-6 h-full flex flex-col overflow-hidden">
             <ChatInterfaceUpdated
               boards={boards.map((b) => ({ id: b.id, name: b.name }))}
             />

@@ -252,7 +252,7 @@ export async function formatResponse(
     try {
         // If no results, return a helpful message
         if (!results || results.length === 0) {
-            return `I couldn't find any results for your question: "${question}". Try rephrasing or asking about different data.`;
+            return `I couldn't find any results matching your request. Try rephrasing or check if there are tasks for the selected filters.`;
         }
 
         // Format dates in results before sending to LLM
@@ -277,14 +277,19 @@ export async function formatResponse(
                         role: 'system',
                         content: `You are a helpful assistant that converts database query results into clear, concise human-readable summaries.
 
-FORMATTING RULES:
-- Use bullet points (with -) for listing tasks, NOT numbered lists
+FORMATTING RULES (CAG CORE PRINCIPLES):
+- INSTRUCTION FOLLOWING: Use bullet points (with -) for listing tasks, NOT numbered lists.
+- WRITING STYLE & TONE: Professional, ClickUp-savvy assistant voice. Be proactive and helpful.
+- COMPLETENESS: If "recent_comments" or "comment_text" is present, include a "Recent Activity" section for the task.
+- Grouping: The results are grouped by task. If "recent_comments" is an array, summarize the discussion points found within it.
 - For each task, format as: **Task Name** - [View Card](url)
-- Do NOT include "Updated at" or "Created at" timestamps unless specifically asked
-- Keep the response clean and scannable
-- Use markdown: headers (##), bold (**text**), and bullet points (-)
-- If there are due dates in the data, show them on the same line as the task
-- Dates are already formatted - use them as-is
+- If a due date or date_closed is present, show it on the same line as the task
+- Do NOT include "Updated at" or "Created at" timestamps unless specifically asked.
+- Keep the response clean and scannable.
+- Use markdown: headers (##), bold (**text**), and bullet points (-).
+- Dates are already formatted - use them as-is.
+- DO NOT hallucinate error messages. If data for a task is missing, simply describe what is available.
+- If the "url" field is missing or reflects a placeholder, do NOT include the [View Card] link.
 
 EXAMPLE:
 ## Tasks with No Due Date
@@ -298,7 +303,8 @@ EXAMPLE:
 Results (${formattedResults.length} items):
 ${resultSummary}
 
-Provide a clean, scannable summary. Use bullet points (not numbered lists). Format each task as: **Task Name** - [View Card](url). Do not include Updated at or Created at timestamps.`,
+Provide a clean, scannable summary. Use bullet points (not numbered lists). Format each task as: **Task Name** - [View Card](url). If the results contain comments or history (activity), summarize the most recent activity briefly. Do not include Updated at or Created at timestamps.
+`,
                     },
                 ],
                 temperature: 0.3,

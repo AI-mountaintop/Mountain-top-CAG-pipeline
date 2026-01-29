@@ -134,7 +134,7 @@ export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedPro
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth min-h-0 chat-messages-container">
                 {!selectedBoardId ? (
                     <div className="text-center py-12">
                         <MessageSquare size={64} className="mx-auto text-gray-300 mb-4" />

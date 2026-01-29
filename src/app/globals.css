@@ -108,3 +108,36 @@ body {
   background-color: #f3f4f6;
   font-weight: 600;
 }
+
+/* Custom Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Force scrollbar visibility for chat messages */
+.chat-messages-container {
+  scrollbar-gutter: stable;
+}
+
+.chat-messages-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-messages-container::-webkit-scrollbar-thumb {
+  background: #ff6b35; /* Using primary orange */
+  border-radius: 10px;
+}

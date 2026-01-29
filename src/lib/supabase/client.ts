@@ -1,14 +1,41 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/^["']|["']$/g, '');
+const supabaseAnonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').replace(/^["']|["']$/g, '');
+const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').replace(/^["']|["']$/g, '');
+
+// Helper to validate URL
+const isValidUrl = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const isConfigured = isValidUrl(supabaseUrl) && supabaseAnonKey && supabaseAnonKey !== 'your_supabase_anon_key';
 
 // Client-side Supabase client (with anon key)
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = isConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null as any;
 
 // Server-side Supabase client (with service role key for admin operations)
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey);
+export const supabaseAdmin = isConfigured
+  ? createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey)
+  : null as any;
+
+/**
+ * Throws a descriptive error if Supabase is not properly configured.
+ */
+export const ensureSupabaseConfigured = () => {
+  if (!isConfigured) {
+    throw new Error(
+      `Supabase is not configured correctly. Please check your .env file for NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.`
+    );
+  }
+};
 
 // Type definitions for database tables
 // Type definitions for database tables
