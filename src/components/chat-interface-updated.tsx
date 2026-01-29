@@ -21,12 +21,12 @@ interface ChatInterfaceUpdatedProps {
 }
 
 const EXAMPLE_QUESTIONS = [
-    'What cards are due this week?',
-    'Show me all cards in the "In Progress" list',
-    'What changed in the last 10 minutes?',
-    'Which cards have no due date?',
-    'Show me cards with the "urgent" label',
-    'How many cards are there in each list?',
+    'Show me overdue tasks',
+    'What tasks are assigned to Ian?',
+    'Tasks completed this week',
+    'High priority tasks',
+    'Tasks with no due date',
+    'What changed recently?',
 ];
 
 export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedProps) {

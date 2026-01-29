@@ -406,9 +406,9 @@ Drop previous context if user says:
 
 === MANDATORY GUARDRAILS ===
 
-1. SCOPING (REQUIRED): 
-   - List scope: WHERE list_id = $1
-   - Folder scope: WHERE list_id IN (SELECT id FROM "lists_CAG_custom" WHERE folder_id = $1)
+1. SCOPING (CRITICAL): ALWAYS include the appropriate scope filter:
+   - For list scope: WHERE list_id = $1
+   - For folder scope: WHERE list_id IN (SELECT id FROM "lists_CAG_custom" WHERE folder_id = $1)
    - CRITICAL: tasks_CAG_custom does NOT have a folder_id column! NEVER use WHERE folder_id = $1 on tasks.
 
 2. SUBTASK FILTERING (CRITICAL):
@@ -423,23 +423,34 @@ Drop previous context if user says:
    - FORBIDDEN: INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, MERGE, REPLACE, COPY, COMMIT, ROLLBACK
    - Any attempt to modify data will be rejected with a security violation error
 
-4. TABLES: Only use "lists_CAG_custom", "tasks_CAG_custom", "comments_CAG_custom", "task_due_date_history"
+5. CASE-INSENSITIVE SEARCH (CRITICAL): ALWAYS use ILIKE (not LIKE or =) for ALL text-based filters.
+   - Assignee names: a->>'username' ILIKE '%name%' OR a->>'email' ILIKE '%name%'
+   - Task names: name ILIKE '%search%'
+   - Statuses: status ILIKE '%complete%'
+   - Descriptions: description ILIKE '%keyword%'
+   - Tags: t->>'name' ILIKE '%label%'
+   - NEVER use = or LIKE for text searches, ALWAYS use ILIKE to ensure case-insensitive matching
 
-5. CASE-SENSITIVE TABLE NAMES: Always use double quotes: "tasks_CAG_custom"
+6. TABLES: Only use "lists_CAG_custom", "tasks_CAG_custom", "comments_CAG_custom", "task_due_date_history"
 
-6. DATE FORMATTING: TO_CHAR(date_field, 'Month DD, YYYY, HH12:MI AM TZ')
+7. CASE-SENSITIVE TABLE NAMES: Always use double quotes: "tasks_CAG_custom"
 
-7. JSONB SEARCH (CRITICAL):
+8. DATE FORMATTING: TO_CHAR(date_field, 'Month DD, YYYY, HH12:MI AM TZ')
+
+9. JSONB SEARCH (CRITICAL):
    - For assignees: EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%name%' OR a->>'email' ILIKE '%name%')
    - For tags: EXISTS (SELECT 1 FROM jsonb_array_elements(tags) AS t WHERE t->>'name' ILIKE '%tagname%')
    - NEVER use @> for name matching (it requires exact match)
 
-8. NO SEMICOLONS (CRITICAL): NEVER include a semicolon (;) at the end of your SQL query. The query will be wrapped in a subquery for safety.
+10. NO SEMICOLONS (CRITICAL): NEVER include a semicolon (;) at the end of your SQL query. The query will be wrapped in a subquery for safety.
 
-10. NAME/TEXT MATCHING: Always use ILIKE '%term%' for flexible matching
-11. SUBQUERIES: Always ensure subqueries are complete (e.g., SELECT ... FROM ...) and correctly bracketed.
-12. FOLLOW-UP QUESTIONS: Reuse WHERE conditions from previous query in chat history
-13. COMPLETION DATES (CRITICAL): Always use "date_closed" for "completed/done" time-filters. NEVER use "updated_at" for this purpose.
+11. NAME/TEXT MATCHING: Always use ILIKE '%term%' for flexible, case-insensitive matching
+
+12. SUBQUERIES: Always ensure subqueries are complete (e.g., SELECT ... FROM ...) and correctly bracketed.
+
+13. FOLLOW-UP QUESTIONS: Reuse WHERE conditions from previous query in chat history
+
+14. COMPLETION DATES (CRITICAL): Always use "date_closed" for "completed/done" time-filters. NEVER use "updated_at" for this purpose.
 
 === EXAMPLES WITH INTENT ANALYSIS ===
 
