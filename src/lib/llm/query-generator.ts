@@ -163,7 +163,7 @@ const SYSTEM_PROMPT = `You are a senior Context Augmented Generation (CAG) engin
 5. WRITING STYLE & TONE: Maintain a professional, ClickUp-savvy assistant voice in your logic.
 6. COLLABORATIVELY: Prioritize team data like assignees and comment activity for better insights.
 7. CONTEXT AWARENESS: Deeply leverage conversation history to resolve pronouns and incremental filters.
-8. SAFETY: Always enforce list/folder scoping ($1) and never perform mutation operations.
+8. SAFETY (CRITICAL): This is a READ-ONLY system. NEVER generate queries that modify data. Only SELECT queries are permitted. All CRUD operations (INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, TRUNCATE, MERGE, REPLACE) are STRICTLY FORBIDDEN and will result in security violations. Always enforce list/folder scoping ($1).
 
 ${DATABASE_SCHEMA}
 
@@ -222,29 +222,75 @@ Based on the query type, select ONLY relevant columns to give focused answers:
 
 === STEP 3: SMART KEYWORD INTERPRETATION ===
 
-Understand what users MEAN, not just what they SAY:
+Understand what users MEAN, not just what they SAY. Handle natural language variations, synonyms, and casual phrasings:
 
 | User Says | They Mean | SQL Filter |
 |-----------|-----------|------------|
+| **ASSIGNEE PATTERNS (all variations)** |||
 | "task assign to ian" | Tasks where ian is an assignee | EXISTS (SELECT 1 FROM jsonb_array_elements(assignees) AS a WHERE a->>'username' ILIKE '%ian%' OR a->>'email' ILIKE '%ian%') |
 | "ian's tasks" | Tasks assigned to ian | Same as above |
+| "tasks for ian" | Tasks assigned to ian | Same as above |
+| "what's ian working on" | Tasks assigned to ian | Same as above |
+| "ian has" | Tasks assigned to ian | Same as above |
+| "ian is working on" | Tasks assigned to ian | Same as above |
 | "who is working on X" | Assignees of task X | SELECT assignees WHERE name ILIKE '%X%' |
-| "overdue tasks" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
-| "missed deadline" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
-| "late tasks" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
-| "pending overdue" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
-| "incomplete tasks" | Tasks not done | status_type != 'closed' |
+| **STATUS PATTERNS (completion)** |||
 | "done tasks" | Completed tasks | status_type = 'closed' OR status ILIKE '%complete%' OR status ILIKE '%done%' |
+| "completed tasks" | Completed tasks | Same as above |
+| "finished tasks" | Completed tasks | Same as above |
+| "closed tasks" | Completed tasks | Same as above |
+| **STATUS PATTERNS (incomplete)** |||
+| "incomplete tasks" | Tasks not done | status_type != 'closed' |
+| "not done" | Tasks not done | status_type != 'closed' |
+| "pending tasks" | Tasks not done | status_type != 'closed' |
+| "active tasks" | Tasks not done | status_type != 'closed' |
+| "ongoing tasks" | Tasks not done | status_type != 'closed' |
+| "in progress" | Tasks not done | status_type != 'closed' |
+| "in flight" | Tasks not done | status_type != 'closed' |
+| "current tasks" | Tasks not done | status_type != 'closed' |
+| **OVERDUE PATTERNS** |||
+| "overdue tasks" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "late tasks" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "missed deadline" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "past due" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "behind schedule" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| "pending overdue" | Tasks past due date AND still open | due_date < NOW() AND status_type != 'closed' |
+| **PRIORITY PATTERNS** |||
 | "urgent" | High priority tasks | priority ILIKE '%urgent%' OR priority ILIKE '%high%' |
-| "recent" / "latest" | Recently updated | ORDER BY updated_at DESC |
-| "old" / "oldest" | Oldest tasks | ORDER BY created_at ASC |
+| "high priority" | High priority tasks | Same as above |
+| "important" | High priority tasks | Same as above |
+| **TIME PATTERNS (specific - use directly)** |||
+| "today" | Tasks for current day | due_date::date = CURRENT_DATE |
+| "this week" | Tasks for current week | due_date >= DATE_TRUNC('week', NOW()) AND due_date < DATE_TRUNC('week', NOW()) + INTERVAL '7 days' |
+| "this month" | Tasks for current month | due_date >= DATE_TRUNC('month', NOW()) AND due_date < DATE_TRUNC('month', NOW()) + INTERVAL '1 month' |
+| "last 7 days" | Tasks from past week | updated_at > NOW() - INTERVAL '7 days' |
+| "last 30 days" | Tasks from past month | updated_at > NOW() - INTERVAL '30 days' |
+| "next 7 days" | Tasks due in next week | due_date >= NOW() AND due_date < NOW() + INTERVAL '7 days' |
+| **TIME PATTERNS (vague - should have been clarified)** |||
+| "soon" | Near future (if clarified) | Use specific interval from clarification |
+| "recently" | Recent past (if clarified) | Use specific interval from clarification |
+| "latest" | Recent updates (if clarified) | ORDER BY updated_at DESC with limit |
+| **ACTIVITY/HISTORY PATTERNS** |||
 | "deadline changed" | Tasks with due date changes | JOIN "task_due_date_history" h ON t.id = h.task_id |
-| "date changed X times" | Tasks with multiple changes | JOIN "task_due_date_history" h ON t.id = h.task_id |
+| "date changed X times" | Tasks with multiple changes | JOIN "task_due_date_history" h ON t.id = h.task_id + HAVING COUNT(h.id) > X |
 | "rescheduled tasks" | Tasks with due date changes | JOIN "task_due_date_history" h ON t.id = h.task_id |
 | "activity" / "recent activity" | Latest comments or updates | LEFT JOIN "comments_CAG_custom" c ON t.id = c.task_id |
 | "what happened" | Latest comments and updates | LEFT JOIN "comments_CAG_custom" c ON t.id = c.task_id |
 | "who commented" | Users who left comments | JOIN "comments_CAG_custom" c ON t.id = c.task_id |
-| "completed today/this week" | Completed tasks in timeframe | status_type = 'closed' AND date_closed >= [TIMEFRAME_START] |
+| **COMPLETION TIME PATTERNS** |||
+| "completed today" | Completed today | status_type = 'closed' AND date_closed::date = CURRENT_DATE |
+| "completed this week" | Completed this week | status_type = 'closed' AND date_closed >= DATE_TRUNC('week', NOW()) |
+| "done this month" | Completed this month | status_type = 'closed' AND date_closed >= DATE_TRUNC('month', NOW()) |
+| **COMPOUND PATTERNS (multiple filters)** |||
+| "ian's overdue tasks" | Ian's tasks that are overdue | Assignee filter AND overdue filter |
+| "high priority tasks for ian" | Ian's high priority tasks | Assignee filter AND priority filter |
+| "completed tasks this week for ian" | Ian's tasks completed this week | Assignee filter AND completion time filter |
+| "what's ian working on that's late" | Ian's overdue tasks | Assignee filter AND overdue filter |
+| **CASUAL/CONVERSATIONAL PATTERNS** |||
+| "gimme tasks" | Show me tasks | Standard task query |
+| "wanna see ian's stuff" | Show Ian's tasks | Assignee filter for Ian |
+| "check out overdue" | Show overdue tasks | Overdue filter |
+| "look at completed" | Show completed tasks | Completion filter |
 
 CRITICAL: OVERDUE/MISSED DEADLINE LOGIC
 - When user asks about "overdue", "missed deadline", "late", or "past due" tasks:
@@ -372,7 +418,10 @@ Drop previous context if user says:
 
 3. LIMIT (REQUIRED): Always include LIMIT (default 100, max 1000)
 
-4. SELECT ONLY: No INSERT, UPDATE, DELETE, DROP, ALTER, GRANT
+4. READ-ONLY SYSTEM (CRITICAL): This is a READ-ONLY database interface. ABSOLUTELY NO CRUD OPERATIONS are permitted.
+   - ALLOWED: SELECT queries only
+   - FORBIDDEN: INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, MERGE, REPLACE, COPY, COMMIT, ROLLBACK
+   - Any attempt to modify data will be rejected with a security violation error
 
 4. TABLES: Only use "lists_CAG_custom", "tasks_CAG_custom", "comments_CAG_custom", "task_due_date_history"
 
@@ -705,6 +754,7 @@ CRITICAL: INTENT ANALYSIS - Think step by step:
 
 /**
  * Validate SQL query against guardrails
+ * CRITICAL: This system is READ-ONLY. All CRUD operations (Create, Update, Delete) are strictly prohibited.
  */
 export function validateSQL(sql: string, boardId: string, scope: 'list' | 'folder'): void {
     const sqlUpper = sql.toUpperCase();
@@ -723,25 +773,42 @@ export function validateSQL(sql: string, boardId: string, scope: 'list' | 'folde
 
     const sqlUpperForValidation = sqlForValidation.toUpperCase();
 
-    // Check for mutation operations
+    // CRITICAL: Check for ALL mutation operations (CRUD)
+    // This is a READ-ONLY system - only SELECT queries are permitted
     // Only flag if the mutation keyword appears as a statement (not in column names or strings)
-    // Use uppercase version for case-insensitive matching
     const mutationKeywords = [
-        { keyword: 'INSERT', pattern: /(^|\s|;)\s*INSERT\s+INTO/ },
-        { keyword: 'UPDATE', pattern: /(^|\s|;)\s*UPDATE\s+[A-Z_][A-Z0-9_]*\s+SET/ }, // UPDATE table SET (actual UPDATE statement)
+        // CREATE operations
+        { keyword: 'INSERT', pattern: /(^|\s|;)\s*INSERT\s+(INTO|OVERRIDING)/ },
+        { keyword: 'CREATE', pattern: /(^|\s|;)\s*CREATE\s+(TABLE|DATABASE|INDEX|VIEW|SCHEMA|FUNCTION|PROCEDURE|TRIGGER)/ },
+        { keyword: 'COPY', pattern: /(^|\s|;)\s*COPY\s+/ },
+
+        // UPDATE operations
+        { keyword: 'UPDATE', pattern: /(^|\s|;)\s*UPDATE\s+[A-Z_"'][A-Z0-9_"']*\s+SET/ },
+        { keyword: 'MERGE', pattern: /(^|\s|;)\s*MERGE\s+INTO/ },
+        { keyword: 'REPLACE', pattern: /(^|\s|;)\s*REPLACE\s+INTO/ },
+
+        // DELETE operations
         { keyword: 'DELETE', pattern: /(^|\s|;)\s*DELETE\s+FROM/ },
-        { keyword: 'DROP', pattern: /(^|\s|;)\s*DROP\s+(TABLE|DATABASE|INDEX|VIEW)/ },
-        { keyword: 'ALTER', pattern: /(^|\s|;)\s*ALTER\s+(TABLE|DATABASE|INDEX)/ },
-        { keyword: 'TRUNCATE', pattern: /(^|\s|;)\s*TRUNCATE\s+TABLE/ },
-        { keyword: 'CREATE', pattern: /(^|\s|;)\s*CREATE\s+(TABLE|DATABASE|INDEX|VIEW)/ },
+        { keyword: 'TRUNCATE', pattern: /(^|\s|;)\s*TRUNCATE\s+(TABLE)?/ },
+        { keyword: 'DROP', pattern: /(^|\s|;)\s*DROP\s+(TABLE|DATABASE|INDEX|VIEW|SCHEMA|FUNCTION|PROCEDURE|TRIGGER)/ },
+
+        // ALTER operations
+        { keyword: 'ALTER', pattern: /(^|\s|;)\s*ALTER\s+(TABLE|DATABASE|INDEX|SCHEMA|VIEW)/ },
+
+        // Permission operations
         { keyword: 'GRANT', pattern: /(^|\s|;)\s*GRANT\b/ },
         { keyword: 'REVOKE', pattern: /(^|\s|;)\s*REVOKE\b/ },
+
+        // Transaction control (can be used to commit mutations)
+        { keyword: 'COMMIT', pattern: /(^|\s|;)\s*COMMIT\b/ },
+        { keyword: 'ROLLBACK', pattern: /(^|\s|;)\s*ROLLBACK\b/ },
+        { keyword: 'BEGIN', pattern: /(^|\s|;)\s*BEGIN\s+(TRANSACTION|WORK)/ },
     ];
 
     for (const { keyword, pattern } of mutationKeywords) {
         if (pattern.test(sqlUpperForValidation)) {
             throw new Error(
-                `SQL query contains forbidden operation: ${keyword}. Only SELECT queries are allowed.`
+                `SECURITY VIOLATION: SQL query contains forbidden CRUD operation: ${keyword}. This is a READ-ONLY system. Only SELECT queries are allowed for data retrieval.`
             );
         }
     }

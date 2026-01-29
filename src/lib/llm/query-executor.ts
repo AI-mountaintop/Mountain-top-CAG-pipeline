@@ -242,6 +242,42 @@ function formatDatesInObject(obj: any): any {
 }
 
 /**
+ * Truncate large text fields to prevent token overflow
+ */
+function truncateField(value: any, maxLength: number = 500): any {
+    if (typeof value === 'string' && value.length > maxLength) {
+        return value.substring(0, maxLength) + '... [truncated]';
+    }
+    if (Array.isArray(value) && value.length > 10) {
+        return value.slice(0, 10);
+    }
+    return value;
+}
+
+/**
+ * Prepare results for LLM by truncating large fields
+ */
+function prepareResultsForLLM(results: any[]): any[] {
+    return results.map(result => {
+        const prepared: any = {};
+        for (const [key, value] of Object.entries(result)) {
+            // Keep essential fields intact, truncate others
+            if (['name', 'url', 'status', 'priority', 'due_date', 'date_closed', 'assignees'].includes(key)) {
+                prepared[key] = value;
+            } else if (key === 'description' || key === 'text_content') {
+                prepared[key] = truncateField(value, 300);
+            } else if (key === 'recent_comments') {
+                // Limit to 3 most recent comments
+                prepared[key] = Array.isArray(value) ? value.slice(0, 3) : value;
+            } else {
+                prepared[key] = truncateField(value, 200);
+            }
+        }
+        return prepared;
+    });
+}
+
+/**
  * Format query results into natural language response
  */
 export async function formatResponse(
@@ -258,11 +294,22 @@ export async function formatResponse(
         // Format dates in results before sending to LLM
         const formattedResults = formatDatesInObject(results);
 
-        // For large result sets, provide summary
-        const resultSummary =
-            formattedResults.length > 10
-                ? `Found ${formattedResults.length} results. Here are the first 10:\n${JSON.stringify(formattedResults.slice(0, 10), null, 2)}`
-                : JSON.stringify(formattedResults, null, 2);
+        // Prepare and truncate results to prevent token overflow
+        const preparedResults = prepareResultsForLLM(formattedResults);
+
+        // Limit to first 10 results for LLM processing
+        const resultsForLLM = preparedResults.slice(0, 10);
+
+        // Create a more compact summary
+        const resultSummary = JSON.stringify(resultsForLLM, null, 2);
+
+        // Check if the summary is too large (rough estimate: 1 char ≈ 0.25 tokens)
+        const estimatedTokens = resultSummary.length * 0.25;
+        if (estimatedTokens > 10000) {
+            // Fallback to basic formatting if data is still too large
+            console.warn('Results too large for LLM formatting, using basic format');
+            return formatResultsBasic(formattedResults, question);
+        }
 
         // Wait for rate limit slots before making API call
         await openaiRateLimiter.waitForSlot('openai-api');
@@ -300,11 +347,10 @@ EXAMPLE:
                         role: 'user',
                         content: `Question: "${question}"
 
-Results (${formattedResults.length} items):
+Results (${formattedResults.length} total, showing first ${resultsForLLM.length}):
 ${resultSummary}
 
-Provide a clean, scannable summary. Use bullet points (not numbered lists). Format each task as: **Task Name** - [View Card](url). If the results contain comments or history (activity), summarize the most recent activity briefly. Do not include Updated at or Created at timestamps.
-`,
+Provide a clean, scannable summary. Use bullet points (not numbered lists). Format each task as: **Task Name** - [View Card](url). If the results contain comments or history (activity), summarize the most recent activity briefly. Do not include Updated at or Created at timestamps.`,
                     },
                 ],
                 temperature: 0.3,
@@ -315,9 +361,45 @@ Provide a clean, scannable summary. Use bullet points (not numbered lists). Form
             response.choices[0]?.message?.content?.trim() || '';
 
         return formattedResponse;
-    } catch (error) {
+    } catch (error: any) {
         console.error('Response formatting error:', error);
-        // Fallback to basic formatting
-        return `Found ${results.length} results:\n${JSON.stringify(results.slice(0, 10), null, 2)}`;
+
+        // Check if it's a 400 error (bad request - likely too much data)
+        if (error?.status === 400) {
+            console.error('OpenAI 400 error - request too large or malformed');
+            return formatResultsBasic(results, question);
+        }
+
+        // Fallback to basic formatting for any error
+        return formatResultsBasic(results, question);
     }
+}
+
+/**
+ * Basic fallback formatting without LLM
+ */
+function formatResultsBasic(results: any[], question: string): string {
+    const count = results.length;
+    const displayResults = results.slice(0, 10);
+
+    let output = `## Found ${count} result${count !== 1 ? 's' : ''}\n\n`;
+
+    displayResults.forEach((result, index) => {
+        const name = result.name || `Task ${index + 1}`;
+        const url = result.url && !result.url.includes('placeholder') ? result.url : null;
+        const status = result.status ? ` (${result.status})` : '';
+        const dueDate = result.due_date ? ` - Due: ${result.due_date}` : '';
+
+        if (url) {
+            output += `- **${name}**${status}${dueDate} - [View Card](${url})\n`;
+        } else {
+            output += `- **${name}**${status}${dueDate}\n`;
+        }
+    });
+
+    if (count > 10) {
+        output += `\n*Showing first 10 of ${count} results*`;
+    }
+
+    return output;
 }

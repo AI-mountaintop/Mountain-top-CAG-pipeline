@@ -37,6 +37,41 @@ export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedPro
     const [showSql, setShowSql] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    // Generate localStorage key for board-specific chat history
+    const getChatStorageKey = (boardId: string) => `chat_history_${boardId}`;
+
+    // Load chat history when board is selected
+    useEffect(() => {
+        if (selectedBoardId) {
+            try {
+                const storageKey = getChatStorageKey(selectedBoardId);
+                const savedHistory = localStorage.getItem(storageKey);
+                if (savedHistory) {
+                    const parsedHistory = JSON.parse(savedHistory);
+                    setMessages(parsedHistory);
+                } else {
+                    setMessages([]);
+                }
+            } catch (error) {
+                console.error('Error loading chat history:', error);
+                setMessages([]);
+            }
+        }
+    }, [selectedBoardId]);
+
+    // Save chat history whenever messages change
+    useEffect(() => {
+        if (selectedBoardId && messages.length > 0) {
+            try {
+                const storageKey = getChatStorageKey(selectedBoardId);
+                localStorage.setItem(storageKey, JSON.stringify(messages));
+            } catch (error) {
+                console.error('Error saving chat history:', error);
+            }
+        }
+    }, [messages, selectedBoardId]);
+
+    // Auto-scroll to bottom when messages change
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
@@ -90,6 +125,14 @@ export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedPro
         setInput(question);
     };
 
+    const clearHistory = () => {
+        if (selectedBoardId) {
+            const storageKey = getChatStorageKey(selectedBoardId);
+            localStorage.removeItem(storageKey);
+            setMessages([]);
+        }
+    };
+
     return (
         <div className="bg-white rounded-lg shadow-md flex flex-col h-full">
             {/* Header with Board Selector */}
@@ -98,16 +141,28 @@ export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedPro
                     <h2 className="text-xl font-bold text-[#1a1f36]">
                         Chat Interface
                     </h2>
-                    <button
-                        onClick={() => setShowSql(!showSql)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-sm ${showSql
-                            ? 'bg-[#ff6b35] text-white'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                            }`}
-                    >
-                        <Code size={16} />
-                        <span>Show SQL</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setShowSql(!showSql)}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-sm ${showSql
+                                ? 'bg-[#ff6b35] text-white'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                }`}
+                        >
+                            <Code size={16} />
+                            <span>Show SQL</span>
+                        </button>
+                        {selectedBoardId && messages.length > 0 && (
+                            <button
+                                onClick={clearHistory}
+                                className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-sm bg-gray-100 text-gray-700 hover:bg-red-100 hover:text-red-700"
+                                title="Clear chat history for this board"
+                            >
+                                <MessageSquare size={16} />
+                                <span>Clear History</span>
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 {/* Board Selector Dropdown */}
@@ -117,10 +172,7 @@ export default function ChatInterfaceUpdated({ boards }: ChatInterfaceUpdatedPro
                     </label>
                     <select
                         value={selectedBoardId}
-                        onChange={(e) => {
-                            setSelectedBoardId(e.target.value);
-                            setMessages([]); // Clear messages when switching boards
-                        }}
+                        onChange={(e) => setSelectedBoardId(e.target.value)}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#ff6b35] focus:border-transparent bg-white text-gray-900"
                     >
                         <option value="">Choose a board...</option>
